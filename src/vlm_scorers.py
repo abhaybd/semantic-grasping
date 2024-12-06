@@ -4,11 +4,15 @@ import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 import time
+import base64
+import argparse
 
 from PIL import Image
 import torch
-from transformers import AutoProcessor, LlavaForConditionalGeneration, GenerationConfig, AutoModelForCausalLM
+from transformers import AutoProcessor, GenerationConfig, AutoModelForCausalLM
 import json5
+from openai import OpenAI
+from pydantic import BaseModel
 
 import os
 os.environ["HF_HOME"] = "/net/nfs2.prior/abhayd/huggingface_cache"
@@ -126,6 +130,51 @@ class MolmoGraspEvaluator(ComparisonGraspEvaluator):
             ret.append(pred)
         return ret
 
+class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
+    def __init__(self):
+        self.client = OpenAI()
+
+    def infer(self, task: str, images: np.ndarray) -> List[Literal["green", "red"]]:
+        images = np.asarray(images)
+        if images.ndim == 3:
+            images = np.expand_dims(images, 0)
+        assert images.ndim == 4 and images.shape[-1] == 3
+
+        class Response(BaseModel):
+            image_description: str
+            grasp_description: str
+            explanation: str
+            best_grasp_color: Literal["red", "green"]
+
+        ret = []
+        for image in images:
+            buf = io.BytesIO()
+            Image.fromarray(image).save(buf, format="JPEG")
+            encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+            completion = self.client.beta.chat.completions.parse(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": f"You are a robot tasked with choosing the best grasp, red or green, for the task \"{task}\". If both are equally unsuitable, default to red."},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Which grasp, red or green, should you perform?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{encoded}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                response_format=Response
+            )
+            ret.append(completion.choices[0].message.parsed.best_grasp_color)
+        return ret
 
 def test_infer(evaluator: ComparisonGraspEvaluator):
     task = "grasp a pan to cook something"
@@ -153,12 +202,22 @@ def test_choose_grasp(evaluator: BaseGraspEvaluator):
     img = render_grasps(rgb, depth, cam_info, grasps, np.array([[255, 0, 0]]*len(grasps)))
     Image.fromarray(img).save("all_grasps.png")
 
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("evaluator", choices=["molmo", "openai"])
+    return parser.parse_args()
 
 def main():
-    evaluator = MolmoGraspEvaluator()
+    args = get_args()
+    if args.evaluator == "molmo":
+        evaluator = MolmoGraspEvaluator()
+    elif args.evaluator == "openai":
+        evaluator = OpenAIGraspEvaluator()
+    else:
+        raise ValueError(f"Invalid evaluator: {args.evaluator}")
     import open3d as o3d
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
-    test_infer(evaluator)
+    # test_infer(evaluator)
     test_choose_grasp(evaluator)
 
 if __name__ == "__main__":
