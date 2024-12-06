@@ -63,9 +63,9 @@ def render_offscreen(geometries, width, height, cam_info):
     renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
     renderer.scene.set_background(np.array([0, 0, 0, 1]))
     renderer.scene.view.set_post_processing(False)
+    material = o3d.visualization.rendering.MaterialRecord()
+    material.shader = "defaultUnlit"
     for i, geom in enumerate(geometries):
-        material = o3d.visualization.rendering.MaterialRecord()
-        material.shader = "defaultUnlit"
         renderer.scene.add_geometry(f"geom{i}", geom, material)
     intrinsics = o3d.camera.PinholeCameraIntrinsic(width, height, cam_info)
     renderer.setup_camera(intrinsics, np.eye(4))
@@ -78,7 +78,24 @@ def render_grasps(rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, gras
     pcd.points = o3d.utility.Vector3dVector(pc[..., :3])
     pcd.colors = o3d.utility.Vector3dVector(pc[..., 3:6] / 255)
 
-    grasps = np.asarray(grasps)
+    colors = np.asarray(colors)
+    if np.issubdtype(colors.dtype, np.integer):
+        colors = colors / 255
+
+    geoms = [pcd]
+    for grasp, color in zip(grasps, colors):
+        geoms.extend(create_grasp(grasp, color))
+
+    rendered = render_offscreen(geoms, rgb.shape[1], rgb.shape[0], cam_info)
+    mask = np.all(rendered == 0, axis=-1)
+    rendered[mask] = rgb[mask]
+    return rendered
+
+def render_grasps_pc(rgb: np.ndarray, pc: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, colors: np.ndarray):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pc[..., :3])
+    pcd.colors = o3d.utility.Vector3dVector(pc[..., 3:6] / 255)
+
     colors = np.asarray(colors)
     if np.issubdtype(colors.dtype, np.integer):
         colors = colors / 255
