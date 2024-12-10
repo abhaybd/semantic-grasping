@@ -7,14 +7,17 @@ OBJ_NAME = "112_spatula"
 SCAN_ID = "0"
 TASK_NAME = "stir"
 
+GEOM_SCALE = 2.0
+
 pc = np.load(f"{SCANS_DIR}/{OBJ_NAME}/fused_pc_clean.npy")
 pc[:,:3] -= pc[..., :3].mean(axis=0, keepdims=True)
+pc[..., :3] *= GEOM_SCALE
 
 grasps_map = {}
 for grasp_id in os.listdir(os.path.join(SCANS_DIR, OBJ_NAME, "grasps")):
     grasp = np.load(os.path.join(SCANS_DIR, OBJ_NAME, "grasps", grasp_id, "grasp.npy"))
     grasps_map[int(grasp_id)] = grasp
-grasps = np.zeros((max(grasps_map.keys()) + 1, 4, 4))
+grasps = np.zeros((len(grasps_map.keys()), 4, 4))
 for k, v in grasps_map.items():
     grasps[k] = v
 
@@ -43,6 +46,7 @@ GRIPPER_POINTS = np.array([
         [-0.03, 0.07, 0, 1],
         [-0.03, -0.07, 0, 1],
         [0.03, -0.07, 0, 1]])
+# GRIPPER_POINTS[:, :3] *= GEOM_SCALE
 
 def look_at(p1: np.ndarray, p2: np.ndarray):
     z = p2 - p1
@@ -61,6 +65,7 @@ def look_at(p1: np.ndarray, p2: np.ndarray):
 
 def create_grasp(grasp_pose: np.ndarray, color=None):
     gripper_points = GRIPPER_POINTS @ grasp_pose.T
+    gripper_points[:, :3] *= GEOM_SCALE
     geoms = []
     for i in range(len(gripper_points) - 1):
         p1 = gripper_points[i,:3]
@@ -85,8 +90,31 @@ grasp_geoms = [
     *create_grasp(grasps[bad_id], [0, 1, 0])
 ]
 
+axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+
 # from itertools import chain
 # grasp_geoms = list(chain.from_iterable(create_grasp(g, [0, 1, 0]) for g in grasps[good_grasp_ids]))
 # grasp_geoms += list(chain.from_iterable(create_grasp(g, [1, 0, 0]) for g in grasps[bad_grasp_ids]))
 
-o3d.visualization.draw_geometries([pcd] + grasp_geoms)
+r = 1.0
+theta = np.random.rand() * 2 * np.pi
+psi = np.random.rand() * np.pi/3
+pos = np.array([r * np.cos(theta) * np.sin(psi), r * np.sin(theta) * np.sin(psi), r * np.cos(psi)])
+up_vec = np.array([0, 0, 1.])
+up_vec -= up_vec.dot(pos) * pos
+
+# Create a plane
+plane_size = 10.0
+plane = o3d.geometry.TriangleMesh.create_box(width=plane_size, height=plane_size, depth=0.01, create_uv_map=True)
+plane.translate([-plane_size/2, -plane_size/2, np.min(pc[..., 2]) - 0.01])
+material = o3d.visualization.rendering.MaterialRecord()
+material.shader = "defaultUnlit"
+material.albedo_img = o3d.io.read_image("img/wood_texture_4k.jpg")
+
+geometry = [
+    {"name": "box", "geometry": plane, "material": material},
+    {"name": "pcd", "geometry": pcd},
+    # {"name": "axes", "geometry": axes},
+    *grasp_geoms
+]
+o3d.visualization.draw(geometry, eye=pos, up=up_vec, lookat=[0, 0, 0], show_skybox=False, bg_color=[0, 0, 0, 1])
