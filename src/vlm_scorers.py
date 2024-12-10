@@ -6,6 +6,7 @@ from collections import defaultdict
 import time
 import base64
 import argparse
+from xml.etree import ElementTree as ET
 
 from PIL import Image
 import torch
@@ -21,23 +22,6 @@ from grasp_renderer import render_grasps_pc, img_to_pc
 from splitstream import splitfile
 import io
 
-
-def generate_prompt(task: str):
-    # return f"Which grasp, red or green, is more suitable for the task of \"{task}\"? Answer the question through identifying the grasp that is the most suitable, finding grasps which are definitely not suitable, and providing a ranking from most to least preferable for the grasps. First, describe where the grasps are located, then give the question response, then provide the explanation. Finally, in a single word say the color of the best grasp."
-    # return re.sub(r"\s+", " ", f"""
-    return f"""
-Which grasp, red or green, is more suitable for the task of "{task}"? If both are equally unsuitable, default to red.
-
-Answer the following question in JSON format, with the following structure:
-{{
-    "image_description": "This should describe the image, and identify objects relevant to the task.",
-    "grasp_description": "This should describe the red and green grasps, where they are placed relative to the relevant object, and how that affects the answer to this question.",
-    "explanation": "This should describe why the most suitable grasp is the best, and why the other grasps are not suitable.",
-    "best_grasp_color": "This should be a single word, red or green, indicating the color of the best grasp."
-}}
-
-Only provide a single JSON object as the answer, with no other text.
-""".strip()
 
 class BaseGraspEvaluator(ABC):
     @abstractmethod
@@ -90,13 +74,30 @@ class MolmoGraspEvaluator(ComparisonGraspEvaluator):
         self.processor = AutoProcessor.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
         self.model = AutoModelForCausalLM.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
 
+    def generate_prompt(self, task: str):
+        # return f"Which grasp, red or green, is more suitable for the task of \"{task}\"? Answer the question through identifying the grasp that is the most suitable, finding grasps which are definitely not suitable, and providing a ranking from most to least preferable for the grasps. First, describe where the grasps are located, then give the question response, then provide the explanation. Finally, in a single word say the color of the best grasp."
+        # return re.sub(r"\s+", " ", f"""
+        return f"""
+Which grasp, red or green, is more suitable for the task of "{task}"? If both are equally unsuitable, default to red.
+
+Answer the following question in JSON format, with the following structure:
+{{
+    "image_description": "This should describe the image, and identify objects relevant to the task.",
+    "grasp_description": "This should describe the red and green grasps, where they are placed relative to the relevant object, and how that affects the answer to this question.",
+    "explanation": "This should describe why the most suitable grasp is the best, and why the other grasps are not suitable.",
+    "best_grasp_color": "This should be a single word, red or green, indicating the color of the best grasp."
+}}
+
+Only provide a single JSON object as the answer, with no other text.
+""".strip()
+
     def infer(self, task: str, images: np.ndarray) -> List[Literal["green", "red"]]:
         images = np.asarray(images)
         if images.ndim == 3:
             images = np.expand_dims(images, 0)
         assert images.ndim == 4 and images.shape[-1] == 3
 
-        task_prompt = generate_prompt(task)
+        task_prompt = self.generate_prompt(task)
         inputs = defaultdict(list)
         import time
         start = time.perf_counter()
@@ -129,6 +130,60 @@ class MolmoGraspEvaluator(ComparisonGraspEvaluator):
             assert pred in {"green", "red"}, f"Invalid prediction:\n{response}"
             ret.append(pred)
         return ret
+
+class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
+    def __init__(self):
+        super().__init__()
+        self.processor = AutoProcessor.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
+        self.model = AutoModelForCausalLM.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
+
+    def generate_prompt(self, task: str):
+        return f"Point to where I should grasp to complete the task '{task}'."
+
+    def grasp_img_points(self, grasps: np.ndarray, cam_info: np.ndarray):
+        grasp_pos = grasps[:, :3, 3] + grasps[:, :3, 2] * 0.1
+        grasp_px = grasp_pos @ cam_info.T
+        grasp_px = grasp_px[:, :2] / grasp_px[:, 2:]
+        grasp_px = grasp_px.astype(int)
+        return grasp_px
+
+    def parse_vlm_output(self, xml_str: str, img_shape: tuple) -> np.ndarray:
+        try:
+            root = ET.fromstring(xml_str)
+            if root.tag == "point":
+                point = np.array([round(float(root.get("x")) / 100 * img_shape[1]), round(float(root.get("y")) / 100 * img_shape[0])])
+            elif root.tag == "points":
+                print("WARN: multiple points generated!")
+                points = []
+                i = 0
+                while f"x{i}" in root.attrib:
+                    points.append([round(float(root.get(f"x{i}")) / 100 * img_shape[1]), round(float(root.get(f"y{i}")) / 100 * img_shape[0])])
+                    i += 1
+                point = np.array(points[np.random.choice(len(points))])
+            return point
+        except ET.ParseError as e:
+            print("Invalid XML:\n", xml_str)
+            raise e
+
+    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
+        rgb = rgb.copy()
+        task_prompt = self.generate_prompt(task)
+        inputs = self.processor.process(images=[rgb], text=task_prompt)
+        inputs = {k: v.to(self.model.device).unsqueeze(0) for k, v in inputs.items()}
+
+        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+            output = self.model.generate_from_batch(
+                inputs,
+                GenerationConfig(max_new_tokens=512, stop_strings="<|endoftext|>"), tokenizer=self.processor.tokenizer
+            )
+        output_tokens = output[0, inputs["input_ids"].size(1):]
+        xml_str = self.processor.tokenizer.decode(output_tokens, skip_special_tokens=True)
+        point = self.parse_vlm_output(xml_str, rgb.shape[:2])
+
+        grasp_px = self.grasp_img_points(grasps, cam_info)
+        best_idx = np.argmin(np.linalg.norm(grasp_px - point.reshape(1, -1), axis=1))
+        return best_idx
+
 
 class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
     def __init__(self):
@@ -176,10 +231,11 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
             ret.append(completion.choices[0].message.parsed.best_grasp_color)
         return ret
 
-def test_infer(evaluator: ComparisonGraspEvaluator):
-    task = "grasp a pan to cook something"
-    image = np.asarray(Image.open(f"pan.png"))
-    print("Eval for pan.png:", evaluator.infer(task, image))
+def test_infer(evaluator: BaseGraspEvaluator):
+    if isinstance(evaluator, ComparisonGraspEvaluator):
+        task = "grasp a pan to cook something"
+        image = np.asarray(Image.open(f"pan.png"))
+        print("Eval for pan.png:", evaluator.infer(task, image))
 
 def test_choose_grasp(evaluator: BaseGraspEvaluator):
     from viz_scans import SCANS_DIR
@@ -192,7 +248,8 @@ def test_choose_grasp(evaluator: BaseGraspEvaluator):
     grasp_confs = np.load(f"{SCANS_DIR}/{obj_name}/grasp_confs.npy")
     grasps = grasps[grasp_confs > 0.4]
 
-    grasps = grasps[np.random.choice(len(grasps), 16, replace=False)]
+    if not isinstance(evaluator, MolmoPointingGraspEvaluator):
+        grasps = grasps[np.random.choice(len(grasps), 16, replace=False)]
 
     grasp_idx = evaluator.choose_grasp("grasp a pan to cook something", rgb, depth, cam_info, grasps)
     print("Chose grasp:", grasp_idx)
@@ -204,7 +261,7 @@ def test_choose_grasp(evaluator: BaseGraspEvaluator):
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("evaluator", choices=["molmo", "openai"])
+    parser.add_argument("evaluator", choices=["molmo", "openai", "molmo_pointing"])
     return parser.parse_args()
 
 def main():
@@ -213,6 +270,8 @@ def main():
         evaluator = MolmoGraspEvaluator()
     elif args.evaluator == "openai":
         evaluator = OpenAIGraspEvaluator()
+    elif args.evaluator == "molmo_pointing":
+        evaluator = MolmoPointingGraspEvaluator()
     else:
         raise ValueError(f"Invalid evaluator: {args.evaluator}")
     import open3d as o3d
