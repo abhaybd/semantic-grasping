@@ -1,5 +1,6 @@
 import open3d as o3d
 import numpy as np
+import uuid
 
 GRIPPER_POINTS = np.array([
         [-0.10, 0, 0, 1],
@@ -59,18 +60,33 @@ def create_grasp(grasp_pose: np.ndarray, color=None):
         geoms.append(cylinder)
     return geoms
 
-def render_offscreen(geometries, width, height, cam_info):
+def to_geom_dict(geom) -> dict:
+    if not isinstance(geom, dict):
+        assert isinstance(geom, o3d.geometry.Geometry)
+        geom = {"geometry": geom}
+
+    if "name" not in geom:
+        geom["name"] = f"unnamed_{str(uuid.uuid4())}"
+    if "material" not in geom:
+        default_material = o3d.visualization.rendering.MaterialRecord()
+        default_material.shader = "defaultUnlit"
+        geom["material"] = default_material
+    assert all(k in geom for k in ["name", "geometry", "material"])
+    return geom
+
+def render_offscreen(geometries: list, width: int, height: int, cam_info: np.ndarray, extrinsics: np.ndarray, depth=False):
     renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
     renderer.scene.set_background(np.array([0, 0, 0, 1]))
     renderer.scene.view.set_post_processing(False)
-    material = o3d.visualization.rendering.MaterialRecord()
-    material.shader = "defaultUnlit"
-    for i, geom in enumerate(geometries):
-        renderer.scene.add_geometry(f"geom{i}", geom, material)
+    for geom in geometries:
+        renderer.scene.add_geometry(**to_geom_dict(geom))
     intrinsics = o3d.camera.PinholeCameraIntrinsic(width, height, cam_info)
-    renderer.setup_camera(intrinsics, np.eye(4))
-    img = renderer.render_to_image()
-    return np.asarray(img).astype(np.uint8)
+    renderer.setup_camera(intrinsics, extrinsics)
+    if depth:
+        img = np.asarray(renderer.render_to_depth_image())
+    else:
+        img = np.asarray(renderer.render_to_image()).astype(np.uint8)
+    return img
 
 def render_grasps(rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, colors: np.ndarray):
     pc = img_to_pc(rgb, depth, cam_info)
@@ -86,7 +102,7 @@ def render_grasps(rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, gras
     for grasp, color in zip(grasps, colors):
         geoms.extend(create_grasp(grasp, color))
 
-    rendered = render_offscreen(geoms, rgb.shape[1], rgb.shape[0], cam_info)
+    rendered = render_offscreen(geoms, rgb.shape[1], rgb.shape[0], cam_info, np.eye(4))
     mask = np.all(rendered == 0, axis=-1)
     rendered[mask] = rgb[mask]
     return rendered
@@ -104,7 +120,7 @@ def render_grasps_pc(rgb: np.ndarray, pc: np.ndarray, cam_info: np.ndarray, gras
     for grasp, color in zip(grasps, colors):
         geoms.extend(create_grasp(grasp, color))
 
-    rendered = render_offscreen(geoms, rgb.shape[1], rgb.shape[0], cam_info)
+    rendered = render_offscreen(geoms, rgb.shape[1], rgb.shape[0], cam_info, np.eye(4))
     mask = np.all(rendered == 0, axis=-1)
     rendered[mask] = rgb[mask]
     return rendered

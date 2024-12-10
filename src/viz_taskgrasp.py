@@ -46,7 +46,6 @@ GRIPPER_POINTS = np.array([
         [-0.03, 0.07, 0, 1],
         [-0.03, -0.07, 0, 1],
         [0.03, -0.07, 0, 1]])
-# GRIPPER_POINTS[:, :3] *= GEOM_SCALE
 
 def look_at(p1: np.ndarray, p2: np.ndarray):
     z = p2 - p1
