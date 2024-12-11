@@ -18,7 +18,7 @@ from pydantic import BaseModel
 import os
 os.environ["HF_HOME"] = "/net/nfs2.prior/abhayd/huggingface_cache"
 
-from grasp_renderer import render_grasps_pc, img_to_pc
+from grasp_renderer import GraspRenderer
 from splitstream import splitfile
 import io
 
@@ -36,15 +36,15 @@ class BaseGraspEvaluator(ABC):
 
 class ComparisonGraspEvaluator(BaseGraspEvaluator):
     def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
+        grasp_renderer = GraspRenderer(rgb, depth, cam_info)
         grasp_idxs = np.arange(len(grasps))
         np.random.shuffle(grasp_idxs)
         red_green = np.array([[255, 0, 0], [0, 255, 0]])
-        pc = img_to_pc(rgb, depth, cam_info)
         while len(grasp_idxs) > 1:
             inference_imgs = []
             start = time.perf_counter()
             for i in range(0, len(grasp_idxs)-1, 2):
-                inference_imgs.append(render_grasps_pc(rgb, pc, cam_info, grasps[grasp_idxs[i:i+2]], red_green))
+                inference_imgs.append(grasp_renderer.render(grasps[grasp_idxs[i:i+2]], red_green))
             print(f"Num samples: {len(inference_imgs)}, Render time: {time.perf_counter() - start:.3f}s")
             preds = self.infer(task, inference_imgs)
             new_grasp_idxs = []
@@ -166,7 +166,6 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
             raise e
 
     def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
-        rgb = rgb.copy()
         task_prompt = self.generate_prompt(task)
         inputs = self.processor.process(images=[rgb], text=task_prompt)
         inputs = {k: v.to(self.model.device).unsqueeze(0) for k, v in inputs.items()}
@@ -238,8 +237,7 @@ def test_infer(evaluator: BaseGraspEvaluator):
         print("Eval for pan.png:", evaluator.infer(task, image))
 
 def test_choose_grasp(evaluator: BaseGraspEvaluator):
-    from viz_scans import SCANS_DIR
-    from grasp_renderer import render_grasps
+    SCANS_DIR = "data/real_scans"
     obj_name = "pan"
     cam_info = np.load(f"{SCANS_DIR}/{obj_name}/cam_info.npy")
     depth = np.load(f"{SCANS_DIR}/{obj_name}/depth.npy")
@@ -253,10 +251,12 @@ def test_choose_grasp(evaluator: BaseGraspEvaluator):
 
     grasp_idx = evaluator.choose_grasp("grasp a pan to cook something", rgb, depth, cam_info, grasps)
     print("Chose grasp:", grasp_idx)
-    img = render_grasps(rgb, depth, cam_info, [grasps[grasp_idx]], [[0, 255, 0]])
+    gr = GraspRenderer(rgb, depth, cam_info)
+    img = gr.render([grasps[grasp_idx]], [[0, 255, 0]])
     Image.fromarray(img).save("chosen_grasp.png")
 
-    img = render_grasps(rgb, depth, cam_info, grasps, np.array([[255, 0, 0]]*len(grasps)))
+    render_grasps = grasps[np.random.choice(len(grasps), min(32, len(grasps)), replace=False)]
+    img = gr.render(render_grasps, np.array([[255, 0, 0]]*len(render_grasps)))
     Image.fromarray(img).save("all_grasps.png")
 
 def get_args():
