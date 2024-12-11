@@ -7,7 +7,7 @@ import open3d as o3d
 from PIL import Image
 from tqdm import tqdm
 
-from grasp_renderer import render_offscreen, GRIPPER_OFFSET
+from grasp_renderer import GRIPPER_OFFSET, GeomRenderer
 
 # change-of-basis trf from TaskGrasp to M2T2 grasp frame
 TG_TO_M2T2_TRF = np.eye(4)
@@ -52,7 +52,7 @@ def create_floor(z_pos, size=10.0):
     material.albedo_img = o3d.io.read_image("img/wood_texture_4k.jpg")
     return {"name": "floor", "geometry": plane, "material": material}
 
-def render_scenes(data_dir: str, obj_name: str, n_views: int, output_dir: str):
+def render_scenes(renderer: GeomRenderer, data_dir: str, obj_name: str, n_views: int, output_dir: str):
     obj_dir = os.path.join(data_dir, obj_name)
     pc: np.ndarray = np.load(f"{obj_dir}/fused_pc_clean.npy")
     pc[:,:3] -= pc[..., :3].mean(axis=0, keepdims=True)
@@ -61,7 +61,7 @@ def render_scenes(data_dir: str, obj_name: str, n_views: int, output_dir: str):
     pcd.colors = o3d.utility.Vector3dVector(pc[:,3:6] / 255)
     geoms = [pcd, create_floor(np.min(pc[..., 2]) - 0.04)]
 
-    img_h, img_w = 720, 1280
+    img_h, img_w = renderer.height, renderer.width
     fov_x = np.pi/3
     f_x = img_w / (2 * np.tan(fov_x / 2))
     cam_info = np.array([
@@ -79,8 +79,8 @@ def render_scenes(data_dir: str, obj_name: str, n_views: int, output_dir: str):
 
     for i in range(n_views):
         cam_pose = random_camera_pose() # world-to-cam transform
-        rgb = render_offscreen(geoms, img_w, img_h, cam_info, cam_pose)
-        depth = render_offscreen(geoms, img_w, img_h, cam_info, cam_pose, depth=True)
+        rgb = renderer.render(geoms, cam_info, cam_pose, depth=False)
+        depth = renderer.render(geoms, cam_info, cam_pose, depth=True)
         grasps_trf = np.expand_dims(cam_pose, axis=0) @ grasps @ np.linalg.inv(TG_TO_M2T2_TRF)
         grasps_trf[:, :3, 3] -= GRIPPER_OFFSET * grasps_trf[:, :3, 2]
 
@@ -93,21 +93,28 @@ def render_scenes(data_dir: str, obj_name: str, n_views: int, output_dir: str):
         np.save(f"{obj_save_dir}/grasps.npy", grasps_trf)
         np.save(f"{obj_save_dir}/grasp_confs.npy", grasp_confs)
 
+def init_process():
+    globals()["renderer"] = GeomRenderer(1280, 720)
+
+def render_async(*args):
+    return render_scenes(globals()["renderer"], *args)
+
 def main():
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     args = get_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
     if args.synchronous:
+        renderer = GeomRenderer(1280, 720)
         for obj_name in tqdm(os.listdir(args.data_dir)):
-            render_scenes(args.data_dir, obj_name, args.n_views, args.output_dir)
+            render_scenes(renderer, args.data_dir, obj_name, args.n_views, args.output_dir)
     else:
-        with mp.Pool() as p:
+        with mp.Pool(processes=64, initializer=init_process) as p:
             futures = []
             queue = mp.Queue()
             for obj_name in os.listdir(args.data_dir):
                 futures.append(
-                    p.apply_async(render_scenes,
+                    p.apply_async(render_async,
                                 (args.data_dir, obj_name, args.n_views, args.output_dir),
                                 callback=queue.put,
                                 error_callback=queue.put))

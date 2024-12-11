@@ -69,19 +69,28 @@ def to_geom_dict(geom) -> dict:
     assert all(k in geom for k in ["name", "geometry", "material"])
     return geom
 
+class GeomRenderer(object):
+    def __init__(self, width: int, height: int):
+        self.width = width
+        self.height = height
+        self.renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
+        self.renderer.scene.set_background(np.array([0, 0, 0, 1]))
+        self.renderer.scene.view.set_post_processing(False)
+
+    def render(self, geometries: list, cam_info: np.ndarray, extrinsics: np.ndarray, depth=False):
+        self.renderer.scene.clear_geometry()
+        for geom in geometries:
+            self.renderer.scene.add_geometry(**to_geom_dict(geom))
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(self.width, self.height, cam_info)
+        self.renderer.setup_camera(intrinsics, extrinsics)
+        if depth:
+            img = np.asarray(self.renderer.render_to_depth_image(z_in_view_space=True))
+        else:
+            img = np.asarray(self.renderer.render_to_image()).astype(np.uint8)
+        return img
+
 def render_offscreen(geometries: list, width: int, height: int, cam_info: np.ndarray, extrinsics: np.ndarray, depth=False):
-    renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
-    renderer.scene.set_background(np.array([0, 0, 0, 1]))
-    renderer.scene.view.set_post_processing(False)
-    for geom in geometries:
-        renderer.scene.add_geometry(**to_geom_dict(geom))
-    intrinsics = o3d.camera.PinholeCameraIntrinsic(width, height, cam_info)
-    renderer.setup_camera(intrinsics, extrinsics)
-    if depth:
-        img = np.asarray(renderer.render_to_depth_image(z_in_view_space=True))
-    else:
-        img = np.asarray(renderer.render_to_image()).astype(np.uint8)
-    return img
+    return GeomRenderer(width, height).render(geometries, cam_info, extrinsics, depth)
 
 def render_grasps(rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, colors: np.ndarray):
     pc = img_to_pc(rgb, depth, cam_info)
