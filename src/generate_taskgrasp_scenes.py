@@ -7,13 +7,22 @@ import open3d as o3d
 from PIL import Image
 from tqdm import tqdm
 
-from grasp_renderer import render_offscreen
+from grasp_renderer import render_offscreen, GRIPPER_OFFSET
+
+# change-of-basis trf from TaskGrasp to M2T2 grasp frame
+TG_TO_M2T2_TRF = np.eye(4)
+TG_TO_M2T2_TRF[:3, :3] = np.array([
+    [0, -1, 0],
+    [0, 0, -1],
+    [1, 0, 0]
+])
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--data-dir", type=str, default="data/taskgrasp/scans")
     parser.add_argument("-n", "--n-views", type=int, default=5)
     parser.add_argument("-o", "--output-dir", type=str, default="data/taskgrasp_scenes")
+    parser.add_argument("-s", "--synchronous", action="store_true", help="Disable parallel processing")
     return parser.parse_args()
 
 def random_camera_pose():
@@ -47,14 +56,13 @@ def render_scenes(data_dir: str, obj_name: str, n_views: int, output_dir: str):
     obj_dir = os.path.join(data_dir, obj_name)
     pc: np.ndarray = np.load(f"{obj_dir}/fused_pc_clean.npy")
     pc[:,:3] -= pc[..., :3].mean(axis=0, keepdims=True)
-    pc[:,:3] *= 2
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pc[:,:3])
     pcd.colors = o3d.utility.Vector3dVector(pc[:,3:6] / 255)
-    geoms = [pcd, create_floor(np.min(pc[..., 2]))]
+    geoms = [pcd, create_floor(np.min(pc[..., 2]) - 0.04)]
 
     img_h, img_w = 720, 1280
-    fov_x = np.pi/2
+    fov_x = np.pi/3
     f_x = img_w / (2 * np.tan(fov_x / 2))
     cam_info = np.array([
         [f_x, 0, img_w / 2],
@@ -70,16 +78,19 @@ def render_scenes(data_dir: str, obj_name: str, n_views: int, output_dir: str):
     grasp_confs = np.ones(len(grasps), dtype=np.float32)
 
     for i in range(n_views):
-        cam_pose = random_camera_pose()
+        cam_pose = random_camera_pose() # world-to-cam transform
         rgb = render_offscreen(geoms, img_w, img_h, cam_info, cam_pose)
         depth = render_offscreen(geoms, img_w, img_h, cam_info, cam_pose, depth=True)
+        grasps_trf = np.expand_dims(cam_pose, axis=0) @ grasps @ np.linalg.inv(TG_TO_M2T2_TRF)
+        grasps_trf[:, :3, 3] -= GRIPPER_OFFSET * grasps_trf[:, :3, 2]
+
         obj_save_dir = f"{output_dir}/{obj_name}-view{i}"
         if not os.path.isdir(obj_save_dir):
             os.mkdir(obj_save_dir)
         np.save(f"{obj_save_dir}/cam_info.npy", cam_info)
         Image.fromarray(rgb).save(f"{obj_save_dir}/rgb.png")
         np.save(f"{obj_save_dir}/depth.npy", depth)
-        np.save(f"{obj_save_dir}/grasps.npy", grasps)
+        np.save(f"{obj_save_dir}/grasps.npy", grasps_trf)
         np.save(f"{obj_save_dir}/grasp_confs.npy", grasp_confs)
 
 def main():
@@ -87,18 +98,22 @@ def main():
     args = get_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    with mp.Pool() as p:
-        futures = []
-        queue = mp.Queue()
-        for obj_name in os.listdir(args.data_dir):
-            futures.append(
-                p.apply_async(render_scenes,
-                              (args.data_dir, obj_name, args.n_views, args.output_dir),
-                              callback=queue.put,
-                              error_callback=queue.put))
-        for _ in tqdm(range(len(futures))):
-            queue.get()
-        assert all(future.ready() and future.successful() for future in futures)
+    if args.synchronous:
+        for obj_name in tqdm(os.listdir(args.data_dir)):
+            render_scenes(args.data_dir, obj_name, args.n_views, args.output_dir)
+    else:
+        with mp.Pool() as p:
+            futures = []
+            queue = mp.Queue()
+            for obj_name in os.listdir(args.data_dir):
+                futures.append(
+                    p.apply_async(render_scenes,
+                                (args.data_dir, obj_name, args.n_views, args.output_dir),
+                                callback=queue.put,
+                                error_callback=queue.put))
+            for _ in tqdm(range(len(futures))):
+                queue.get()
+            assert all(future.ready() and future.successful() for future in futures)
 
 if __name__ == "__main__":
     main()

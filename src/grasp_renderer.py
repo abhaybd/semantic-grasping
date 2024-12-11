@@ -78,7 +78,7 @@ def render_offscreen(geometries: list, width: int, height: int, cam_info: np.nda
     intrinsics = o3d.camera.PinholeCameraIntrinsic(width, height, cam_info)
     renderer.setup_camera(intrinsics, extrinsics)
     if depth:
-        img = np.asarray(renderer.render_to_depth_image())
+        img = np.asarray(renderer.render_to_depth_image(z_in_view_space=True))
     else:
         img = np.asarray(renderer.render_to_image()).astype(np.uint8)
     return img
