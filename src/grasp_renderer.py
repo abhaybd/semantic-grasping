@@ -2,23 +2,18 @@ import open3d as o3d
 import numpy as np
 import uuid
 
+GRIPPER_OFFSET = 0.08
 GRIPPER_POINTS = np.array([
-        [-0.10, 0, 0, 1],
-        [-0.03, 0, 0, 1],
-        [-0.03, 0.07, 0, 1],
-        [0.03, 0.07, 0, 1],
-        [-0.03, 0.07, 0, 1],
-        [-0.03, -0.07, 0, 1],
-        [0.03, -0.07, 0, 1]])
-
-GRIPPER_POINTS[:, 0] += 0.08
-
-CAM_POSE = np.eye(4)
-CAM_POSE[:3, :3] = np.array([
-    [0, 0, 1],
-    [-1, 0, 0],
-    [0, -1, 0]
+    [0, 0, -0.10, 1],
+    [0, 0, -0.03, 1],
+    [0.07, 0, -0.03, 1],
+    [0.07, 0, 0.03, 1],
+    [0.07, 0, -0.03, 1],
+    [-0.07, 0, -0.03, 1],
+    [-0.07, 0, 0.03, 1]
 ])
+GRIPPER_POINTS[:, 2] += GRIPPER_OFFSET
+
 
 def img_to_pc(rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray):
     h, w = rgb.shape[:2]
@@ -46,7 +41,7 @@ def look_at(p1: np.ndarray, p2: np.ndarray):
     return rot
 
 def create_grasp(grasp_pose: np.ndarray, color=None):
-    gripper_points = GRIPPER_POINTS @ np.linalg.inv(CAM_POSE).T @ grasp_pose.T
+    gripper_points = GRIPPER_POINTS @ grasp_pose.T
     geoms = []
     for i in range(len(gripper_points) - 1):
         p1 = gripper_points[i,:3]
