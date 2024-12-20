@@ -8,6 +8,7 @@ import base64
 import argparse
 from xml.etree import ElementTree as ET
 
+from scipy.spatial.distance import cdist
 from PIL import Image
 import torch
 from transformers import AutoProcessor, GenerationConfig, AutoModelForCausalLM
@@ -25,7 +26,7 @@ import io
 
 class BaseGraspEvaluator(ABC):
     @abstractmethod
-    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
+    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, info_out: dict=None) -> int:
         """
         rgb and depth are single images
         cam_info is 3x3 matrix of camera intrinsics
@@ -33,6 +34,19 @@ class BaseGraspEvaluator(ABC):
         Returns index of optimal grasp
         """
         raise NotImplementedError
+
+    def choose_grasp_batch(self, task: list[str], rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, info_out: list[dict]=None) -> list[int]:
+        """
+        Batch evaluation, every argument is a list of the same length
+        """
+        assert len(task) == len(rgb) == len(depth) == len(cam_info) == len(grasps)
+        ret = []
+        for args in zip(task, rgb, depth, cam_info, grasps):
+            if info_out is not None:
+                info_out.append({})
+            d = info_out[-1] if info_out is not None else None
+            ret.append(self.choose_grasp(*args, info_out=d))
+        return ret
 
 class ComparisonGraspEvaluator(BaseGraspEvaluator):
     def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
@@ -136,6 +150,7 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
         super().__init__()
         self.processor = AutoProcessor.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
         self.model = AutoModelForCausalLM.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
+        self.processor.tokenizer.padding_side = "left"
 
     def generate_prompt(self, task: str):
         return f"Point to where I should grasp to complete the task '{task}'."
@@ -148,40 +163,64 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
         return grasp_px
 
     def parse_vlm_output(self, xml_str: str, img_shape: tuple) -> np.ndarray:
+        """Returns (N,2) array of points"""
         try:
+            f = io.BytesIO(xml_str.encode("utf-8"))
+            xml_str = next(splitfile(f, format="xml"))
             root = ET.fromstring(xml_str)
             if root.tag == "point":
                 point = np.array([round(float(root.get("x")) / 100 * img_shape[1]), round(float(root.get("y")) / 100 * img_shape[0])])
+                points = np.expand_dims(point, 0)
             elif root.tag == "points":
-                print("WARN: multiple points generated!")
                 points = []
-                i = 0
+                i = 1
                 while f"x{i}" in root.attrib:
                     points.append([round(float(root.get(f"x{i}")) / 100 * img_shape[1]), round(float(root.get(f"y{i}")) / 100 * img_shape[0])])
                     i += 1
-                point = np.array(points[np.random.choice(len(points))])
-            return point
+                points = np.array(points)
+            return points
         except ET.ParseError as e:
             print("Invalid XML:\n", xml_str)
             raise e
 
-    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
-        task_prompt = self.generate_prompt(task)
-        inputs = self.processor.process(images=[rgb], text=task_prompt)
-        inputs = {k: v.to(self.model.device).unsqueeze(0) for k, v in inputs.items()}
+    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, info_out: dict=None) -> int:
+        info_out_batch = None if info_out is None else []
+        ret = self.choose_grasp_batch([task], [rgb], [depth], [cam_info], [grasps], info_out=info_out_batch)[0]
+        if info_out is not None:
+            info_out.update(info_out_batch[0])
+        return ret
+
+    def choose_grasp_batch(self, task_batch: list[str], rgb_batch, depth_batch, cam_info_batch, grasps_batch, info_out: list[dict]=None) -> list[int]:
+        rgb_batch = np.asarray(rgb_batch)
+        assert rgb_batch.ndim == 4 and rgb_batch.shape[-1] == 3
+
+        task_prompts = [self.generate_prompt(t) for t in task_batch]
+        inputs = defaultdict(list)
+        for t, rgb in zip(task_prompts, rgb_batch):
+            sample_input = self.processor.process(images=[rgb], text=t)
+            for k, v in sample_input.items():
+                inputs[k].append(v)
+        inputs = self.processor.tokenizer.pad(inputs, return_tensors="pt")
+        del inputs["attention_mask"]
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
         with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
             output = self.model.generate_from_batch(
                 inputs,
-                GenerationConfig(max_new_tokens=512, stop_strings="<|endoftext|>"), tokenizer=self.processor.tokenizer
+                GenerationConfig(max_new_tokens=2048, stop_strings="<|endoftext|>"), tokenizer=self.processor.tokenizer
             )
-        output_tokens = output[0, inputs["input_ids"].size(1):]
-        xml_str = self.processor.tokenizer.decode(output_tokens, skip_special_tokens=True)
-        point = self.parse_vlm_output(xml_str, rgb.shape[:2])
-
-        grasp_px = self.grasp_img_points(grasps, cam_info)
-        best_idx = np.argmin(np.linalg.norm(grasp_px - point.reshape(1, -1), axis=1))
-        return best_idx
+        output_tokens = output[:, inputs["input_ids"].size(1):]
+        ret = []
+        for output, grasps, cam_info in zip(output_tokens, grasps_batch, cam_info_batch):
+            xml_str = self.processor.tokenizer.decode(output, skip_special_tokens=True)
+            points = self.parse_vlm_output(xml_str, rgb_batch.shape[1:3])
+            grasp_px = self.grasp_img_points(grasps, cam_info)
+            dists = cdist(grasp_px, points, "euclidean")
+            best_idx = np.argmin(np.min(dists, axis=1))
+            ret.append(best_idx.item())
+            if info_out is not None:
+                info_out.append({"points": points, "grasp_px": grasp_px})
+        return ret
 
 
 class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
