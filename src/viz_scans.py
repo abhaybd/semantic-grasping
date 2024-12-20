@@ -35,7 +35,7 @@ def main():
         axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
         geoms = [pcd, axes]
 
-        for grasp in grasps[:4]:
+        for grasp in grasps:
             geoms.extend(create_grasp(grasp, [0, 1, 0]))
         
         o3d.visualization.draw_geometries(geoms, front=[0, 0, -1], lookat=[0, 0, 1], up=[0, -1, 0], zoom=0.25)

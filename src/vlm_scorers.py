@@ -211,15 +211,15 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
             )
         output_tokens = output[:, inputs["input_ids"].size(1):]
         ret = []
-        for output, grasps, cam_info in zip(output_tokens, grasps_batch, cam_info_batch):
-            xml_str = self.processor.tokenizer.decode(output, skip_special_tokens=True)
+        for i in range(len(output_tokens)):
+            xml_str = self.processor.tokenizer.decode(output_tokens[i], skip_special_tokens=True)
             points = self.parse_vlm_output(xml_str, rgb_batch.shape[1:3])
-            grasp_px = self.grasp_img_points(grasps, cam_info)
+            grasp_px = self.grasp_img_points(grasps_batch[i], cam_info_batch[i])
             dists = cdist(grasp_px, points, "euclidean")
             best_idx = np.argmin(np.min(dists, axis=1))
             ret.append(best_idx.item())
             if info_out is not None:
-                info_out.append({"points": points, "grasp_px": grasp_px})
+                info_out.append({"points": points, "grasp_px": grasp_px, "prompt": task_prompts[i]})
         return ret
 
 
