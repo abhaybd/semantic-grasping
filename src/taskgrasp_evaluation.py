@@ -14,7 +14,6 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--evaluator", nargs="+", default=["molmo_pointing"])
     parser.add_argument("-b", "--batch-size", type=int, default=64)
-    parser.add_argument("-c", "--grasp-conf-threshold", type=float, default=0.5)
     parser.add_argument("-d", "--data-dir", default="data/taskgrasp_scenes")
     parser.add_argument("-t", "--taskgrasp-dir", default="data/taskgrasp")
     parser.add_argument("-o", "--out-dir", default="eval/taskgrasp")
@@ -38,7 +37,7 @@ def eval_scenes(evaluator: BaseGraspEvaluator, tg_info: TaskGraspInfo, scenes: l
         results[scene.name] = {"grasp_idx": grasp_idx, "classification": classification, "info": info_dict}
     return results
 
-def run_evaluator(data_dir: str, evaluator_name: str, tg_info: TaskGraspInfo, grasp_conf_threshold: float, batch_size: int, out_dir: str):
+def run_evaluator(data_dir: str, evaluator_name: str, tg_info: TaskGraspInfo, batch_size: int, out_dir: str):
     os.makedirs(f"{out_dir}/{evaluator_name}", exist_ok=True)
     if evaluator_name == "molmo_pointing":
         evaluator = MolmoPointingGraspEvaluator()
@@ -50,7 +49,7 @@ def run_evaluator(data_dir: str, evaluator_name: str, tg_info: TaskGraspInfo, gr
     scene_names = sorted([sn for sn in os.listdir(data_dir) if tg_info.valid_obj(sn.split("-")[0])])
     for i in tqdm(range(0, len(scene_names), batch_size), desc=evaluator_name):
         scene_name_batch = scene_names[i:i+batch_size]
-        scene_batch = [Scene(data_dir, scene, grasp_conf_threshold) for scene in scene_name_batch]
+        scene_batch = [Scene(data_dir, scene, 0) for scene in scene_name_batch]
         batch_results = eval_scenes(evaluator, tg_info, scene_batch)
         results.update(batch_results)
         for scene, sample_result in batch_results.items():
@@ -69,7 +68,7 @@ def main():
     args = get_args()
     tg_info = TaskGraspInfo(args.taskgrasp_dir)
     for evaluator_name in args.evaluator:
-        run_evaluator(args.data_dir, evaluator_name, tg_info, args.grasp_conf_threshold, args.batch_size, args.out_dir)
+        run_evaluator(args.data_dir, evaluator_name, tg_info, args.batch_size, args.out_dir)
 
 if __name__ == "__main__":
     main()

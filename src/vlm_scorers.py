@@ -9,7 +9,7 @@ import argparse
 from xml.etree import ElementTree as ET
 
 from scipy.spatial.distance import cdist
-from PIL import Image
+from PIL import Image, ImageOps
 import torch
 from transformers import AutoProcessor, GenerationConfig, AutoModelForCausalLM
 import json5
@@ -145,6 +145,90 @@ Only provide a single JSON object as the answer, with no other text.
             ret.append(pred)
         return ret
 
+# def process_batch(
+#     processor: AutoProcessor,
+#     texts: List[str],
+#     images_list: List[List[Image.Image]]
+# ) -> dict[str, torch.Tensor]:
+#     """
+#     Process in batch.
+
+#     Args:
+#         processor: The original processor.
+#         texts: List of text inputs
+#         images_list: List of lists containing PIL images.
+
+#     Returns:
+#         Dict with padded input_ids, images, image_input_idx, image_masks.
+#     """
+#     batch_size = len(texts)
+#     tokens_list = []
+#     for text in texts:
+#         tokens = processor.tokenizer.encode(" " + text, add_special_tokens=False)
+#         tokens_list.append(tokens)
+#     images_arrays_list = []
+#     image_idxs_list = []
+#     for images in images_list:
+#         if len(images):
+#             image_arrays = []
+#             for image in images:
+#                 if isinstance(image, Image.Image):
+#                     image = image.convert("RGB")
+#                     image = ImageOps.exif_transpose(image)
+#                     image_arrays.append(np.array(image))
+#                 else:
+#                     assert len(image.shape) == 3 and image.shape[-1] == 3
+#                     image_arrays.append(image.astype(np.uint8))
+#             images_arrays_list.append(image_arrays)
+#             image_idx = [-1] * len(image_arrays)
+#             image_idxs_list.append(image_idx)
+#         else:
+#             images_arrays_list.append(None)
+#             image_idxs_list.append(None)
+#     images_kwargs = {
+#         "max_crops": 12,
+#         "overlap_margins": [4, 4],
+#         "base_image_input_size": [336, 336],
+#         "image_token_length_w": 12,
+#         "image_token_length_h": 12,
+#         "image_patch_size": 14,
+#         "image_padding_mask": True,
+#     }
+#     outputs_list = []
+#     for i in range(batch_size):
+#         tokens = tokens_list[i]
+#         images = images_arrays_list[i]
+#         image_idx = image_idxs_list[i]
+#         out = processor.image_processor.multimodal_preprocess(
+#             images=images,
+#             image_idx=image_idx,
+#             tokens=np.asarray(tokens).astype(np.int32),
+#             sequence_length=1536,
+#             image_patch_token_id=processor.special_token_ids["<im_patch>"],
+#             image_col_token_id=processor.special_token_ids["<im_col>"],
+#             image_start_token_id=processor.special_token_ids["<im_start>"],
+#             image_end_token_id=processor.special_token_ids["<im_end>"],
+#             **images_kwargs,
+#         )
+#         outputs_list.append(out)
+
+#     batch_outputs = {}
+#     for key in outputs_list[0].keys():
+#         tensors = [torch.from_numpy(out[key]) for out in outputs_list]
+#         batch_outputs[key] = torch.nn.utils.rnn.pad_sequence(
+#             tensors, batch_first=True, padding_value=-1
+#         )
+#     bos = processor.tokenizer.bos_token_id or processor.tokenizer.eos_token_id
+#     batch_outputs["input_ids"] = torch.nn.functional.pad(
+#         batch_outputs["input_ids"], (1, 0), value=bos
+#     )
+#     if "image_input_idx" in batch_outputs:
+#         image_input_idx = batch_outputs["image_input_idx"]
+#         batch_outputs["image_input_idx"] = torch.where(
+#             image_input_idx < 0, image_input_idx, image_input_idx + 1
+#         )
+#     return batch_outputs
+
 class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
     def __init__(self):
         super().__init__()
@@ -154,6 +238,7 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
 
     def generate_prompt(self, task: str):
         return f"Point to where I should grasp to complete the task '{task}'."
+        # return f"User: Point to where I should grasp to complete the task '{task}'. Assistant:"
 
     def grasp_img_points(self, grasps: np.ndarray, cam_info: np.ndarray):
         grasp_pos = grasps[:, :3, 3] + grasps[:, :3, 2] * 0.1
@@ -202,12 +287,20 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
                 inputs[k].append(v)
         inputs = self.processor.tokenizer.pad(inputs, return_tensors="pt")
         del inputs["attention_mask"]
+        # rgb_batch = np.expand_dims(rgb_batch, 1)
+        # inputs = process_batch(self.processor, task_prompts, rgb_batch)
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
         with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
             output = self.model.generate_from_batch(
                 inputs,
-                GenerationConfig(max_new_tokens=2048, stop_strings="<|endoftext|>"), tokenizer=self.processor.tokenizer
+                GenerationConfig(
+                    max_new_tokens=2048,
+                    stop_strings="<|endoftext|>",
+                    # eos_token_id=self.processor.tokenizer.eos_token_id,
+                    # pad_token_id=self.processor.tokenizer.pad_token_id,
+                ),
+                tokenizer=self.processor.tokenizer
             )
         output_tokens = output[:, inputs["input_ids"].size(1):]
         ret = []
@@ -237,7 +330,7 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
             image_description: str
             grasp_description: str
             explanation: str
-            best_grasp_color: Literal["red", "green"]
+            best_grasp_color: Literal["red" , "green" , "blue" , "yellow" , "cyan" , "magenta" , "brown" , "orange"]# , "pink" , "purple" , "white" , "black" , "gray" , "olive" , "teal" , "lavender"]
 
         ret = []
         for image in images:
@@ -247,13 +340,14 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
             completion = self.client.beta.chat.completions.parse(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": f"You are a robot tasked with choosing the best grasp, red or green, for the task \"{task}\". If both are equally unsuitable, default to red."},
+                    # {"role": "system", "content": f"You are a robot tasked with choosing the best grasp for the task \"{task}\", which are represented as colored grasps drawn on the image. The options are: red, green, blue, yellow, cyan, magenta, brown, orange, pink, purple, white, black, gray, olive, teal, and lavender. If all are equally unsuitable, default to red."},
+                    {"role": "system", "content": f"You are a robot tasked with choosing the best grasp for the task \"{task}\", which are represented as colored grasps drawn on the image. The options are: red, green, blue, yellow, cyan, magenta, brown, and orange. If all are equally unsuitable, default to red."},
                     {
                         "role": "user",
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Which grasp, red or green, should you perform?"
+                                "text": "Which grasp should you perform?"
                             },
                             {
                                 "type": "image_url",
@@ -266,6 +360,7 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
                 ],
                 response_format=Response
             )
+            print(completion.choices[0].message.parsed)
             ret.append(completion.choices[0].message.parsed.best_grasp_color)
         return ret
 
@@ -276,8 +371,8 @@ def test_infer(evaluator: BaseGraspEvaluator):
         print("Eval for pan.png:", evaluator.infer(task, image))
 
 def test_choose_grasp(evaluator: BaseGraspEvaluator):
-    SCANS_DIR = "data/real_scans"
-    obj_name = "pan"
+    SCANS_DIR = "data/taskgrasp_scenes"
+    obj_name = "023_pan-view2"
     cam_info = np.load(f"{SCANS_DIR}/{obj_name}/cam_info.npy")
     depth = np.load(f"{SCANS_DIR}/{obj_name}/depth.npy")
     rgb = np.array(Image.open(f"{SCANS_DIR}/{obj_name}/rgb.png"))
@@ -288,7 +383,7 @@ def test_choose_grasp(evaluator: BaseGraspEvaluator):
     if not isinstance(evaluator, MolmoPointingGraspEvaluator):
         grasps = grasps[np.random.choice(len(grasps), 16, replace=False)]
 
-    grasp_idx = evaluator.choose_grasp("grasp a pan to cook something", rgb, depth, cam_info, grasps)
+    grasp_idx = evaluator.choose_grasp("grasp a pan to saute something", rgb, depth, cam_info, grasps)
     print("Chose grasp:", grasp_idx)
     gr = GraspRenderer(rgb, depth, cam_info)
     img = gr.render([grasps[grasp_idx]], [[0, 255, 0]])
