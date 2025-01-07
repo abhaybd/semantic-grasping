@@ -92,6 +92,33 @@ class GeomRenderer(object):
 def render_offscreen(geometries: list, width: int, height: int, cam_info: np.ndarray, extrinsics: np.ndarray, depth=False):
     return GeomRenderer(width, height).render(geometries, cam_info, extrinsics, depth)
 
+class SceneRenderer(object):
+    def __init__(self, width: int, height: int):
+        self.renderer = GeomRenderer(width, height)
+
+    def set_scene(self, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray):
+        assert rgb.shape[:2] == depth.shape[:2] == (self.renderer.height, self.renderer.width)
+        self.rgb = rgb
+        self.cam_info = cam_info
+        pc = img_to_pc(rgb, depth, cam_info)
+        self.pcd = o3d.geometry.PointCloud()
+        self.pcd.points = o3d.utility.Vector3dVector(pc[..., :3])
+        self.pcd.colors = o3d.utility.Vector3dVector(pc[..., 3:6] / 255)
+
+    def render(self, grasps: np.ndarray, colors: np.ndarray):
+        colors = np.asarray(colors)
+        if np.issubdtype(colors.dtype, np.integer):
+            colors = colors / 255
+
+        geoms = [self.pcd]
+        for grasp, color in zip(grasps, colors):
+            geoms.extend(create_grasp(grasp, color))
+
+        rendered = self.renderer.render(geoms, self.cam_info, np.eye(4))
+        mask = np.all(rendered == 0, axis=-1)
+        rendered[mask] = self.rgb[mask]
+        return rendered
+
 class GraspRenderer(object):
     def __init__(self, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray):
         self.rgb = rgb

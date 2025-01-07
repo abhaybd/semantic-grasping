@@ -145,90 +145,6 @@ Only provide a single JSON object as the answer, with no other text.
             ret.append(pred)
         return ret
 
-# def process_batch(
-#     processor: AutoProcessor,
-#     texts: List[str],
-#     images_list: List[List[Image.Image]]
-# ) -> dict[str, torch.Tensor]:
-#     """
-#     Process in batch.
-
-#     Args:
-#         processor: The original processor.
-#         texts: List of text inputs
-#         images_list: List of lists containing PIL images.
-
-#     Returns:
-#         Dict with padded input_ids, images, image_input_idx, image_masks.
-#     """
-#     batch_size = len(texts)
-#     tokens_list = []
-#     for text in texts:
-#         tokens = processor.tokenizer.encode(" " + text, add_special_tokens=False)
-#         tokens_list.append(tokens)
-#     images_arrays_list = []
-#     image_idxs_list = []
-#     for images in images_list:
-#         if len(images):
-#             image_arrays = []
-#             for image in images:
-#                 if isinstance(image, Image.Image):
-#                     image = image.convert("RGB")
-#                     image = ImageOps.exif_transpose(image)
-#                     image_arrays.append(np.array(image))
-#                 else:
-#                     assert len(image.shape) == 3 and image.shape[-1] == 3
-#                     image_arrays.append(image.astype(np.uint8))
-#             images_arrays_list.append(image_arrays)
-#             image_idx = [-1] * len(image_arrays)
-#             image_idxs_list.append(image_idx)
-#         else:
-#             images_arrays_list.append(None)
-#             image_idxs_list.append(None)
-#     images_kwargs = {
-#         "max_crops": 12,
-#         "overlap_margins": [4, 4],
-#         "base_image_input_size": [336, 336],
-#         "image_token_length_w": 12,
-#         "image_token_length_h": 12,
-#         "image_patch_size": 14,
-#         "image_padding_mask": True,
-#     }
-#     outputs_list = []
-#     for i in range(batch_size):
-#         tokens = tokens_list[i]
-#         images = images_arrays_list[i]
-#         image_idx = image_idxs_list[i]
-#         out = processor.image_processor.multimodal_preprocess(
-#             images=images,
-#             image_idx=image_idx,
-#             tokens=np.asarray(tokens).astype(np.int32),
-#             sequence_length=1536,
-#             image_patch_token_id=processor.special_token_ids["<im_patch>"],
-#             image_col_token_id=processor.special_token_ids["<im_col>"],
-#             image_start_token_id=processor.special_token_ids["<im_start>"],
-#             image_end_token_id=processor.special_token_ids["<im_end>"],
-#             **images_kwargs,
-#         )
-#         outputs_list.append(out)
-
-#     batch_outputs = {}
-#     for key in outputs_list[0].keys():
-#         tensors = [torch.from_numpy(out[key]) for out in outputs_list]
-#         batch_outputs[key] = torch.nn.utils.rnn.pad_sequence(
-#             tensors, batch_first=True, padding_value=-1
-#         )
-#     bos = processor.tokenizer.bos_token_id or processor.tokenizer.eos_token_id
-#     batch_outputs["input_ids"] = torch.nn.functional.pad(
-#         batch_outputs["input_ids"], (1, 0), value=bos
-#     )
-#     if "image_input_idx" in batch_outputs:
-#         image_input_idx = batch_outputs["image_input_idx"]
-#         batch_outputs["image_input_idx"] = torch.where(
-#             image_input_idx < 0, image_input_idx, image_input_idx + 1
-#         )
-#     return batch_outputs
-
 class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
     def __init__(self):
         super().__init__()
@@ -238,7 +154,6 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
 
     def generate_prompt(self, task: str):
         return f"Point to where I should grasp to complete the task '{task}'."
-        # return f"User: Point to where I should grasp to complete the task '{task}'. Assistant:"
 
     def grasp_img_points(self, grasps: np.ndarray, cam_info: np.ndarray):
         grasp_pos = grasps[:, :3, 3] + grasps[:, :3, 2] * 0.1
@@ -286,9 +201,7 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
             for k, v in sample_input.items():
                 inputs[k].append(v)
         inputs = self.processor.tokenizer.pad(inputs, return_tensors="pt")
-        del inputs["attention_mask"]
-        # rgb_batch = np.expand_dims(rgb_batch, 1)
-        # inputs = process_batch(self.processor, task_prompts, rgb_batch)
+        del inputs["attention_mask"] # TODO: this doesn't work for padding!
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
         with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
@@ -297,8 +210,6 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
                 GenerationConfig(
                     max_new_tokens=2048,
                     stop_strings="<|endoftext|>",
-                    # eos_token_id=self.processor.tokenizer.eos_token_id,
-                    # pad_token_id=self.processor.tokenizer.pad_token_id,
                 ),
                 tokenizer=self.processor.tokenizer
             )
@@ -319,6 +230,60 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
 class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
     def __init__(self):
         self.client = OpenAI()
+
+    def choose_from_grasps(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
+        print(task)
+        grasp_renderer = GraspRenderer(rgb, depth, cam_info)
+        grasp_idxs = np.arange(len(grasps))
+
+        class Response(BaseModel):
+            object_description: str
+            grasp_descriptions: list[str]
+            best_grasp_id: int
+            explanation: str
+
+        messages = [
+            {
+                "role": "developer",
+                "content": f"You are a robot task with choosing the best grasp for the task \"{task}\", which are represented as grasps drawn in red on the image. These grasps will be provided to you as a list of images, and you must choose the best one by replying with the ID of the best grasp. If all grasps are equally unsuitable, default to grasp 0."
+            }
+        ]
+        for i, idx in enumerate(grasp_idxs):
+            img = grasp_renderer.render([grasps[idx]], [[255, 0, 0]])
+            buf = io.BytesIO()
+            Image.fromarray(img).save(f"tmp/grasp_{idx}.jpg")
+            Image.fromarray(img).save(buf, format="JPEG")
+            img_encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+            messages.extend([
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"This is grasp {i}."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_encoded}"
+                            }
+                        }
+                    ]
+                },
+                {"role": "assistant", "content": "Got it."}
+            ])
+        messages.append({
+            "role": "user",
+            "content": "Which grasp should you perform?"
+        })
+        completion = self.client.beta.chat.completions.parse(
+            model="gpt-4o",
+            messages=messages,
+            response_format=Response
+        )
+        print(completion.choices[0].message.parsed)
+        return grasp_idxs[completion.choices[0].message.parsed.best_grasp_id]
+
 
     def infer(self, task: str, images: np.ndarray) -> List[Literal["green", "red"]]:
         images = np.asarray(images)
@@ -393,6 +358,31 @@ def test_choose_grasp(evaluator: BaseGraspEvaluator):
     img = gr.render(render_grasps, np.array([[255, 0, 0]]*len(render_grasps)))
     Image.fromarray(img).save("all_grasps.png")
 
+def test_openai(evaluator: OpenAIGraspEvaluator):
+    from taskgrasp_utils import TaskGraspInfo
+    SCANS_DIR = "data/taskgrasp_scenes"
+    tg_info = TaskGraspInfo("data/taskgrasp")
+    # obj_name = "001_squeezer-view1"
+    obj_name = "009_pan-view1"
+    cam_info = np.load(f"{SCANS_DIR}/{obj_name}/cam_info.npy")
+    depth = np.load(f"{SCANS_DIR}/{obj_name}/depth.npy")
+    rgb = np.array(Image.open(f"{SCANS_DIR}/{obj_name}/rgb.png"))
+    grasps = np.load(f"{SCANS_DIR}/{obj_name}/grasps.npy")
+    grasp_confs = np.load(f"{SCANS_DIR}/{obj_name}/grasp_confs.npy")
+    grasps = grasps[grasp_confs > 0.4]
+
+    # grasps = grasps[np.random.choice(len(grasps), 16, replace=False)]
+
+    grasp_idx = evaluator.choose_from_grasps(f"grasp a {obj_name.split('-')[0].split('_',1)[1]} to {tg_info.get_task_verb(obj_name.split('-')[0])} something", rgb, depth, cam_info, grasps)
+    print("Chose grasp:", grasp_idx)
+    gr = GraspRenderer(rgb, depth, cam_info)
+    img = gr.render([grasps[grasp_idx]], [[0, 255, 0]])
+    Image.fromarray(img).save("chosen_grasp.png")
+
+    render_grasps = grasps[np.random.choice(len(grasps), min(32, len(grasps)), replace=False)]
+    img = gr.render(render_grasps, np.array([[255, 0, 0]]*len(render_grasps)))
+    Image.fromarray(img).save("all_grasps.png")
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("evaluator", choices=["molmo", "openai", "molmo_pointing"])
@@ -404,6 +394,7 @@ def main():
         evaluator = MolmoGraspEvaluator()
     elif args.evaluator == "openai":
         evaluator = OpenAIGraspEvaluator()
+        test_openai(evaluator)
     elif args.evaluator == "molmo_pointing":
         evaluator = MolmoPointingGraspEvaluator()
     else:
@@ -411,7 +402,7 @@ def main():
     import open3d as o3d
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     # test_infer(evaluator)
-    test_choose_grasp(evaluator)
+    # test_choose_grasp(evaluator)
 
 if __name__ == "__main__":
     main()

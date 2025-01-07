@@ -25,12 +25,12 @@ class TaskGraspInfo:
     def num_correct_grasps(self, obj: str):
         return len(self.obj_task_grasps[(obj, self.get_task_verb(obj))][0])
 
-    def get_task_verb(self, obj: str):
-        obj_class = obj.split("_", 1)[1]
+    def get_task_verb(self, obj_name: str):
+        obj_class = obj_name.split("_", 1)[1]
         return self.obj_tasks[obj_class]
 
-    def get_task(self, obj: str):
-        obj_class = obj.split("_", 1)[1]
+    def get_task(self, obj_name: str):
+        obj_class = obj_name.split("_", 1)[1]
         return f"grasp a {obj_class} to {self.obj_tasks[obj_class]} something"
 
     def get_grasp_classification(self, obj: str, grasp: int):
@@ -53,3 +53,11 @@ class Scene:
         self.grasps = np.load(f"{scene_dir}/grasps.npy")
         self.grasp_confs = np.load(f"{scene_dir}/grasp_confs.npy")
         self.grasps = self.grasps[self.grasp_confs > grasp_conf_threshold]
+
+    @property
+    def obj_name(self):
+        return self.name.split("-")[0]
+
+    @property
+    def obj_class(self):
+        return self.obj_name.split("_", 1)[1]
