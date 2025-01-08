@@ -1,6 +1,7 @@
 import open3d as o3d
 import numpy as np
 import uuid
+import trimesh
 
 GRIPPER_OFFSET = 0.08
 GRIPPER_POINTS = np.array([
@@ -13,6 +14,13 @@ GRIPPER_POINTS = np.array([
     [-0.07, 0, 0.03, 1]
 ])
 GRIPPER_POINTS[:, 2] += GRIPPER_OFFSET
+
+MESH_TRF = np.array([
+    [0, 0, 1, 0],
+    [1, 0, 0, 0],
+    [0, 1, 0, 0.05],
+    [0, 0, 0, 1]
+])
 
 
 def img_to_pc(rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray):
@@ -39,6 +47,20 @@ def look_at(p1: np.ndarray, p2: np.ndarray):
     rot[:3, 2] = z
     rot[:3, 3] = p1
     return rot
+
+def create_grasp_mesh(grasp_pose: np.ndarray):
+    grasp_pose = grasp_pose @ MESH_TRF
+    tmesh = trimesh.load_mesh("assets/franka_hand.obj").to_geometry()
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(tmesh.vertices)
+    mesh.triangles = o3d.utility.Vector3iVector(tmesh.faces)
+    color = tmesh.visual.to_color()
+    mesh.vertex_colors = o3d.utility.Vector3dVector(color.vertex_colors[:, :3] / 255.0)
+    mesh.vertex_normals = o3d.utility.Vector3dVector(tmesh.vertex_normals)
+    mesh.compute_vertex_normals()
+
+    mesh.transform(grasp_pose)
+    return [mesh]
 
 def create_grasp(grasp_pose: np.ndarray, color=None):
     gripper_points = GRIPPER_POINTS @ grasp_pose.T
