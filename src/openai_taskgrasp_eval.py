@@ -5,6 +5,8 @@ import os
 import json
 import pickle
 import multiprocessing as mp
+import glob
+import re
 
 from tqdm import tqdm
 from PIL import Image
@@ -24,11 +26,11 @@ def get_args():
     subparser = parser.add_subparsers(required=True, dest="subcommand")
     submit_parser = subparser.add_parser("submit")
     submit_parser.add_argument("description", nargs="?")
-    submit_parser.add_argument("-b", "--batch-size", type=int, default=64)
+    submit_parser.add_argument("-b", "--job-batch-size", type=int, default=128)
+    submit_parser.add_argument("--render-batch-size", type=int, default=32)
     submit_parser.set_defaults(func=submit_job)
 
     get_parser = subparser.add_parser("get")
-    get_parser.add_argument("job_id")
     get_parser.set_defaults(func=get_result)
 
     return parser.parse_args()
@@ -40,7 +42,7 @@ class Response(BaseModel):
     explanation: str
 
 def init_submit_proc(width: int, height: int, tg_dir: str):
-    globals()["renderer"] = SceneRenderer(width, height)
+    globals()["renderer"] = SceneRenderer(width, height, mesh=True)
     globals()["tg_info"] = TaskGraspInfo(tg_dir)
 
 def submit_proc(data_dir: str, scene_name: str):
@@ -52,43 +54,63 @@ def submit_proc(data_dir: str, scene_name: str):
         return None
 
 def submit_job(args, tg_info: TaskGraspInfo, client: OpenAI):
-    batchinput_path = os.path.join(args.out_dir, "batchinput.jsonl")
-    if not os.path.isfile(batchinput_path):
+    if not os.path.isfile(os.path.join(args.out_dir, "batchinput_1.jsonl")):
         queries = []
         height, width = Scene(args.data_dir, os.listdir(args.data_dir)[0], 0.0).rgb.shape[:2]
-        with mp.Pool(args.batch_size, initializer=init_submit_proc, initargs=(width, height, args.taskgrasp_dir)) as pool:
+        with mp.Pool(args.render_batch_size, initializer=init_submit_proc, initargs=(width, height, args.taskgrasp_dir)) as pool:
             futures = []
             queue = mp.Queue()
             for scene_name in os.listdir(args.data_dir):
                 futures.append(pool.apply_async(submit_proc, (args.data_dir, scene_name), callback=queue.put, error_callback=queue.put))
-            for _ in tqdm(range(len(futures))):
+            for _ in tqdm(range(len(futures)), smoothing=0.0, dynamic_ncols=True):
                 query = queue.get()
                 if query is not None:
                     if isinstance(query, dict):
                         queries.append(query)
                     else:
                         print(query)
-        with open(batchinput_path, "w") as f:
-            for query in queries:
-                f.write(json.dumps(query) + "\n")
+        for i in range(0, len(queries), args.job_batch_size):
+            batch_idx = i // args.job_batch_size + 1
+            batchinput_path = f"{args.out_dir}/batchinput_{batch_idx}.jsonl"
+            with open(batchinput_path, "w") as f:
+                for query in queries[i:i + args.job_batch_size]:
+                    f.write(json.dumps(query) + "\n")
 
-    batchinput_file = client.files.create(file=open(batchinput_path, "rb"), purpose="batch")
-    batch = client.batches.create(
-        input_file_id=batchinput_file.id,
-        endpoint="/v1/chat/completions",
-        completion_window="24h"
-    )
-    print(f"Submitted batch job with id: {batch.id}")
+    batch_ids = []
+    for batchinput_path in sorted(glob.glob(f"{args.out_dir}/batchinput_*.jsonl")):
+        batchinput_file = client.files.create(file=open(batchinput_path, "rb"), purpose="batch")
+        batch = client.batches.create(
+            input_file_id=batchinput_file.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h"
+        )
+        batch_ids.append(batch.id)
+        print(f"Submitted batch job with id: {batch.id}")
+    with open(f"{args.out_dir}/batch_ids.json", "w") as f:
+        json.dump(batch_ids, f, indent=2)
 
 def get_result(args, tg_info: TaskGraspInfo, client: OpenAI):
     results_file_path = f"{args.out_dir}/response.jsonl"
     if not os.path.isfile(results_file_path):
-        batch = client.batches.retrieve(args.job_id)
-        if batch.status != "completed":
-            print(f"Batch job {args.job_id} is not completed. Status: {batch.status}")
+        with open(f"{args.out_dir}/batch_ids.json") as f:
+            batch_ids = json.load(f)
+        batches = []
+        unfinished_batches = []
+        for batch_id in batch_ids:
+            batch = client.batches.retrieve(batch_id)
+            if batch.status != "completed":
+                unfinished_batches.append(batch)
+            else:
+                batches.append(batch)
+        if len(unfinished_batches) > 0:
+            print(f"{len(unfinished_batches)}/{len(batch_ids)} batches have not completed!")
+            for batch in unfinished_batches:
+                print(f"\t{batch.id}: {batch.status}")
             return
-        results_file = client.files.content(batch.output_file_id)
-        results_file.write_to_file(results_file_path)
+        with open(results_file_path, "w") as f:
+            for batch in batches:
+                results_file = client.files.content(batch.output_file_id)
+                f.write(results_file.content.decode("utf-8"))
 
     with open(results_file_path) as f:
         results_lines = f.read().splitlines()
@@ -97,7 +119,15 @@ def get_result(args, tg_info: TaskGraspInfo, client: OpenAI):
     for line in results_lines:
         result = json.loads(line)
         scene: str = result["custom_id"]
-        response = json.loads(result["response"]["body"]["choices"][0]["message"]["content"])
+        try:
+            response = json.loads(result["response"]["body"]["choices"][0]["message"]["content"])
+        except json.JSONDecodeError:
+            print(f"Malformed JSON response for scene {scene}: {result['response']['body']['choices'][0]['message']['content']}")
+            m = re.search(r"best_grasp_id\": (\d+)", result["response"]["body"]["choices"][0]["message"]["content"])
+            if m is not None:
+                response = {"best_grasp_id": int(m.group(1))}
+            else:
+                continue
         grasp_idx = response["best_grasp_id"]
         classification = tg_info.get_grasp_classification(scene.split("-")[0], grasp_idx)
         results[scene] = {
@@ -120,7 +150,7 @@ def generate_query(tg_info: TaskGraspInfo, scene: Scene, renderer: SceneRenderer
     messages = [
         {
             "role": "developer",
-            "content": f"You are a robot task with choosing the best grasp for the task \"{task}\", which are represented as grasps drawn in red on the image. These grasps will be provided to you as a list of images, and you must choose the best one by replying with the ID of the best grasp. If all grasps are equally unsuitable, default to grasp 0."
+            "content": f"You are a robot task with choosing the best grasp for the task \"{task}\", which are represented as grasps drawn onto an image. These grasps will be provided to you as a list of images, and you must choose the best one by replying with the ID of the best grasp. If all grasps are equally unsuitable, default to grasp 0."
         }
     ]
     renderer.set_scene(scene.rgb, scene.depth, scene.cam_info)

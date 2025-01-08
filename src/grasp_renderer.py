@@ -60,7 +60,9 @@ def create_grasp_mesh(grasp_pose: np.ndarray):
     mesh.compute_vertex_normals()
 
     mesh.transform(grasp_pose)
-    return [mesh]
+    mat = o3d.visualization.rendering.MaterialRecord()
+    mat.shader = "defaultLit"
+    return [{"geometry": mesh, "material": mat}]
 
 def create_grasp(grasp_pose: np.ndarray, color=None):
     gripper_points = GRIPPER_POINTS @ grasp_pose.T
@@ -115,8 +117,9 @@ def render_offscreen(geometries: list, width: int, height: int, cam_info: np.nda
     return GeomRenderer(width, height).render(geometries, cam_info, extrinsics, depth)
 
 class SceneRenderer(object):
-    def __init__(self, width: int, height: int):
+    def __init__(self, width: int, height: int, mesh=False):
         self.renderer = GeomRenderer(width, height)
+        self.mesh = mesh
 
     def set_scene(self, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray):
         assert rgb.shape[:2] == depth.shape[:2] == (self.renderer.height, self.renderer.width)
@@ -128,13 +131,16 @@ class SceneRenderer(object):
         self.pcd.colors = o3d.utility.Vector3dVector(pc[..., 3:6] / 255)
 
     def render(self, grasps: np.ndarray, colors: np.ndarray):
-        colors = np.asarray(colors)
-        if np.issubdtype(colors.dtype, np.integer):
-            colors = colors / 255
-
         geoms = [self.pcd]
-        for grasp, color in zip(grasps, colors):
-            geoms.extend(create_grasp(grasp, color))
+        if not self.mesh:
+            colors = np.asarray(colors)
+            if np.issubdtype(colors.dtype, np.integer):
+                colors = colors / 255
+            for grasp, color in zip(grasps, colors):
+                geoms.extend(create_grasp(grasp, color))
+        else:
+            for grasp in grasps:
+                geoms.extend(create_grasp_mesh(grasp))
 
         rendered = self.renderer.render(geoms, self.cam_info, np.eye(4))
         mask = np.all(rendered == 0, axis=-1)
@@ -142,7 +148,8 @@ class SceneRenderer(object):
         return rendered
 
 class GraspRenderer(object):
-    def __init__(self, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray):
+    def __init__(self, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, mesh=False):
+        self.mesh = mesh
         self.rgb = rgb
         self.cam_info = cam_info
         pc = img_to_pc(rgb, depth, cam_info)
@@ -152,13 +159,16 @@ class GraspRenderer(object):
         self.renderer = GeomRenderer(rgb.shape[1], rgb.shape[0])
 
     def render(self, grasps: np.ndarray, colors: np.ndarray):
-        colors = np.asarray(colors)
-        if np.issubdtype(colors.dtype, np.integer):
-            colors = colors / 255
-
         geoms = [self.pcd]
-        for grasp, color in zip(grasps, colors):
-            geoms.extend(create_grasp(grasp, color))
+        if not self.mesh:
+            colors = np.asarray(colors)
+            if np.issubdtype(colors.dtype, np.integer):
+                colors = colors / 255
+            for grasp, color in zip(grasps, colors):
+                geoms.extend(create_grasp(grasp, color))
+        else:
+            for grasp in grasps:
+                geoms.extend(create_grasp_mesh(grasp))
 
         rendered = self.renderer.render(geoms, self.cam_info, np.eye(4))
         mask = np.all(rendered == 0, axis=-1)
