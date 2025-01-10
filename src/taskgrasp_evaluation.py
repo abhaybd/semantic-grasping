@@ -7,7 +7,7 @@ import argparse
 import pickle
 from tqdm import tqdm
 
-from vlm_scorers import BaseGraspEvaluator, MolmoGraspEvaluator, MolmoPointingGraspEvaluator
+from vlm_scorers import BaseGraspEvaluator, MolmoPointingGraspEvaluator
 from taskgrasp_utils import Scene, TaskGraspInfo
 
 def get_args():
@@ -17,6 +17,7 @@ def get_args():
     parser.add_argument("-d", "--data-dir", default="data/taskgrasp_scenes")
     parser.add_argument("-t", "--taskgrasp-dir", default="data/taskgrasp")
     parser.add_argument("-o", "--out-dir", default="eval/taskgrasp")
+    parser.add_argument("-n", "--nickname")
     return parser.parse_args()
 
 def eval_scenes(evaluator: BaseGraspEvaluator, tg_info: TaskGraspInfo, scenes: list[Scene]):
@@ -38,9 +39,9 @@ def eval_scenes(evaluator: BaseGraspEvaluator, tg_info: TaskGraspInfo, scenes: l
     return results
 
 def run_evaluator(data_dir: str, evaluator_name: str, tg_info: TaskGraspInfo, batch_size: int, out_dir: str):
-    os.makedirs(f"{out_dir}/{evaluator_name}", exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     if evaluator_name == "molmo_pointing":
-        evaluator = MolmoPointingGraspEvaluator()
+        evaluator = MolmoPointingGraspEvaluator(k=2)
     else:
         raise ValueError(f"Unknown evaluator: {evaluator_name}")
     print(f"Evaluating {evaluator_name}...")
@@ -58,9 +59,9 @@ def run_evaluator(data_dir: str, evaluator_name: str, tg_info: TaskGraspInfo, ba
             stats["correct"] += classification == 1
             stats["incorrect"] += classification == -1
             stats["unknown"] += classification == 0
-    with open(f"{out_dir}/{evaluator_name}/results.pkl", "wb") as f:
+    with open(f"{out_dir}/results.pkl", "wb") as f:
         pickle.dump(results, f)
-    with open(f"{out_dir}/{evaluator_name}/stats.json", "w") as f:
+    with open(f"{out_dir}/stats.json", "w") as f:
         json.dump(stats, f, indent=2)
     print(f"Done. Correct={stats['correct']/len(results)}, Incorrect={stats['incorrect']/len(results)}, Unknown={stats['unknown']/len(results)}")
 
@@ -68,7 +69,8 @@ def main():
     args = get_args()
     tg_info = TaskGraspInfo(args.taskgrasp_dir)
     for evaluator_name in args.evaluator:
-        run_evaluator(args.data_dir, evaluator_name, tg_info, args.batch_size, args.out_dir)
+        out_dir = f"{args.out_dir}/{args.nickname or evaluator_name}"
+        run_evaluator(args.data_dir, evaluator_name, tg_info, args.batch_size, out_dir)
 
 if __name__ == "__main__":
     main()

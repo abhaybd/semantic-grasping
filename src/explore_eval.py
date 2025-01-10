@@ -19,6 +19,7 @@ def get_args():
     choice_parser = view_parser.add_mutually_exclusive_group(required=True)
     choice_parser.add_argument("-i", "--idx", type=int)
     choice_parser.add_argument("-n", "--name")
+    view_parser.add_argument("-g", "--draw-grasp", action="store_true")
     view_parser.set_defaults(func=view)
 
     list_parser = subparser.add_parser("list")
@@ -36,7 +37,7 @@ def view(args, results, tg_info):
     obj_name = name.split("-")[0]
 
     scene = Scene(args.data_dir, name, 0.0)
-    if "grasp_px" in results["info"] and "points" in results["info"]:
+    if "grasp_px" in results["info"] and "points" in results["info"] and not args.draw_grasp:
         rgb = scene.rgb.copy()
         for i, grasp_px in enumerate(results["info"]["grasp_px"]):
             classification = tg_info.get_grasp_classification(obj_name, i)
@@ -49,7 +50,7 @@ def view(args, results, tg_info):
         for point_px in results["info"]["points"]:
             cv2.circle(rgb, tuple(point_px), 5, (0, 0, 255), -1)
     else:
-        renderer = GraspRenderer(scene.rgb, scene.depth, scene.cam_info, mesh=True)
+        renderer = GraspRenderer(scene.rgb, scene.depth, scene.cam_info, mesh=False)
         idx = results["grasp_idx"]
         rgb = renderer.render([scene.grasps[idx]], [[255, 0, 0]])
     Image.fromarray(rgb).save(f"{args.eval_dir}/miss_{name}.png")

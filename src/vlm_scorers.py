@@ -1,4 +1,4 @@
-from typing import List, Literal
+from typing import List, Literal, Optional
 import numpy as np
 import re
 from abc import ABC, abstractmethod
@@ -49,18 +49,27 @@ class BaseGraspEvaluator(ABC):
         return ret
 
 class ComparisonGraspEvaluator(BaseGraspEvaluator):
-    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray) -> int:
+    def choose_grasp(self, task: str, rgb: np.ndarray, depth: np.ndarray, cam_info: np.ndarray, grasps: np.ndarray, info_out: Optional[dict]=None) -> int:
         grasp_renderer = GraspRenderer(rgb, depth, cam_info)
         grasp_idxs = np.arange(len(grasps))
         np.random.shuffle(grasp_idxs)
         red_green = np.array([[255, 0, 0], [0, 255, 0]])
+        if info_out is not None:
+            info_out["inference_rounds"] = []
+            info_out["bracket"] = []
         while len(grasp_idxs) > 1:
             inference_imgs = []
             start = time.perf_counter()
             for i in range(0, len(grasp_idxs)-1, 2):
                 inference_imgs.append(grasp_renderer.render(grasps[grasp_idxs[i:i+2]], red_green))
-            print(f"Num samples: {len(inference_imgs)}, Render time: {time.perf_counter() - start:.3f}s")
-            preds = self.infer(task, inference_imgs)
+            # print(f"Num samples: {len(inference_imgs)}, Render time: {time.perf_counter() - start:.3f}s")
+            infer_info = [] if info_out is not None else None
+            preds = self.infer(task, inference_imgs, info_out=infer_info)
+            if info_out is not None:
+                info_out["bracket"].append([])
+                for i in range(0, len(grasp_idxs)-1, 2):
+                    info_out["bracket"][-1].append([grasp_idxs[i], grasp_idxs[i+1], preds[i//2]])
+                info_out["inference_rounds"].append(infer_info)
             new_grasp_idxs = []
             for i, pred in enumerate(preds):
                 if pred == "green":
@@ -73,7 +82,7 @@ class ComparisonGraspEvaluator(BaseGraspEvaluator):
         return grasp_idxs[0]
 
     @abstractmethod
-    def infer(self, task: str, image: np.ndarray) -> List[Literal["green", "red"]]:
+    def infer(self, task: str, image: np.ndarray, info_out: Optional[dict]=None) -> List[Literal["green", "red"]]:
         raise NotImplementedError
 
 def parse_response(response: str):
@@ -146,14 +155,18 @@ Only provide a single JSON object as the answer, with no other text.
         return ret
 
 class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
-    def __init__(self):
+    def __init__(self, k=1):
         super().__init__()
-        self.processor = AutoProcessor.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
-        self.model = AutoModelForCausalLM.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="auto")
-        self.processor.tokenizer.padding_side = "left"
+        self.processor = AutoProcessor.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype='auto', device_map="auto")
+        self.model = AutoModelForCausalLM.from_pretrained("allenai/Molmo-7B-D-0924", trust_remote_code=True, torch_dtype='auto', device_map="auto")
+        self.k = k
+        # self.processor.tokenizer.padding_side = "left"
 
     def generate_prompt(self, task: str):
-        return f"Point to where I should grasp to complete the task '{task}'."
+        if self.k == 1:
+            return f"Point to where I should grasp to complete the task '{task}'."
+        else:
+            return f"Point to the {self.k} best locations where I should grasp to complete the task '{task}'."
 
     def grasp_img_points(self, grasps: np.ndarray, cam_info: np.ndarray):
         grasp_pos = grasps[:, :3, 3] + grasps[:, :3, 2] * 0.1
@@ -200,19 +213,19 @@ class MolmoPointingGraspEvaluator(BaseGraspEvaluator):
             sample_input = self.processor.process(images=[rgb], text=t)
             for k, v in sample_input.items():
                 inputs[k].append(v)
-        inputs = self.processor.tokenizer.pad(inputs, return_tensors="pt")
-        del inputs["attention_mask"] # TODO: this doesn't work for padding!
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        # inputs = self.processor.tokenizer.pad(inputs, return_tensors="pt")
+        # del inputs["attention_mask"] # TODO: this doesn't work for padding!
+        inputs = {k: torch.stack(v).to(self.model.device) for k, v in inputs.items()}
 
-        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
-            output = self.model.generate_from_batch(
-                inputs,
-                GenerationConfig(
-                    max_new_tokens=2048,
-                    stop_strings="<|endoftext|>",
-                ),
-                tokenizer=self.processor.tokenizer
-            )
+        # with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+        output = self.model.generate_from_batch(
+            inputs,
+            GenerationConfig(
+                max_new_tokens=2048,
+                stop_strings="<|endoftext|>",
+            ),
+            tokenizer=self.processor.tokenizer
+        )
         output_tokens = output[:, inputs["input_ids"].size(1):]
         ret = []
         for i in range(len(output_tokens)):
@@ -285,7 +298,7 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
         return grasp_idxs[completion.choices[0].message.parsed.best_grasp_id]
 
 
-    def infer(self, task: str, images: np.ndarray) -> List[Literal["green", "red"]]:
+    def infer(self, task: str, images: np.ndarray, info_out: Optional[list]=None) -> List[Literal["green", "red"]]:
         images = np.asarray(images)
         if images.ndim == 3:
             images = np.expand_dims(images, 0)
@@ -295,18 +308,20 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
             image_description: str
             grasp_description: str
             explanation: str
-            best_grasp_color: Literal["red" , "green" , "blue" , "yellow" , "cyan" , "magenta" , "brown" , "orange"]# , "pink" , "purple" , "white" , "black" , "gray" , "olive" , "teal" , "lavender"]
+            best_grasp_color: Literal["red" , "green"]
 
         ret = []
         for image in images:
             buf = io.BytesIO()
+            Image.fromarray(image).save(f"tmp/{self.scene}_infer{self.count}.jpg")
+            self.count += 1
             Image.fromarray(image).save(buf, format="JPEG")
             encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
             completion = self.client.beta.chat.completions.parse(
                 model="gpt-4o",
                 messages=[
                     # {"role": "system", "content": f"You are a robot tasked with choosing the best grasp for the task \"{task}\", which are represented as colored grasps drawn on the image. The options are: red, green, blue, yellow, cyan, magenta, brown, orange, pink, purple, white, black, gray, olive, teal, and lavender. If all are equally unsuitable, default to red."},
-                    {"role": "system", "content": f"You are a robot tasked with choosing the best grasp for the task \"{task}\", which are represented as colored grasps drawn on the image. The options are: red, green, blue, yellow, cyan, magenta, brown, and orange. If all are equally unsuitable, default to red."},
+                    {"role": "system", "content": f"You are a robot tasked with choosing the best grasp for the task \"{task}\", which are represented as grasps drawn on the image in red and green. Reply with the most suitable grasp, between red and green. If all are equally unsuitable, default to red."},
                     {
                         "role": "user",
                         "content": [
@@ -325,36 +340,59 @@ class OpenAIGraspEvaluator(ComparisonGraspEvaluator):
                 ],
                 response_format=Response
             )
-            print(completion.choices[0].message.parsed)
+            # print(completion.choices[0].message.parsed)
+            if info_out is not None:
+                info_out.append(completion.choices[0].message.parsed.__dict__)
             ret.append(completion.choices[0].message.parsed.best_grasp_color)
         return ret
 
 def test_infer(evaluator: BaseGraspEvaluator):
-    if isinstance(evaluator, ComparisonGraspEvaluator):
-        task = "grasp a pan to cook something"
-        image = np.asarray(Image.open(f"pan.png"))
-        print("Eval for pan.png:", evaluator.infer(task, image))
+    if not isinstance(evaluator, ComparisonGraspEvaluator):
+        return
+    from taskgrasp_utils import TaskGraspInfo, Scene
+    SCANS_DIR = "data/taskgrasp_scenes"
+    tg_info = TaskGraspInfo("data/taskgrasp")
+    scene_name = "153_spatula-view3"
+    scene = Scene(SCANS_DIR, scene_name, 0.0)
+
+    idxs = [9, 18]
+
+    gr = GraspRenderer(scene.rgb, scene.depth, scene.cam_info)
+    img = gr.render(scene.grasps[idxs], [[0, 255, 0], [255, 0, 0]])
+
+    Image.fromarray(img).save("infer.png")
+
+    info = {}
+    ret = evaluator.infer(tg_info.get_task(scene.obj_name), [img], info_out=info)[0]
+    print(ret)
+    print(idxs)
+    print("Grasp:", idxs[["green", "red"].index(ret)])
+    print(info)
+    breakpoint()
 
 def test_choose_grasp(evaluator: BaseGraspEvaluator):
+    from taskgrasp_utils import TaskGraspInfo, Scene
     SCANS_DIR = "data/taskgrasp_scenes"
-    obj_name = "023_pan-view2"
-    cam_info = np.load(f"{SCANS_DIR}/{obj_name}/cam_info.npy")
-    depth = np.load(f"{SCANS_DIR}/{obj_name}/depth.npy")
-    rgb = np.array(Image.open(f"{SCANS_DIR}/{obj_name}/rgb.png"))
-    grasps = np.load(f"{SCANS_DIR}/{obj_name}/grasps.npy")
-    grasp_confs = np.load(f"{SCANS_DIR}/{obj_name}/grasp_confs.npy")
-    grasps = grasps[grasp_confs > 0.4]
+    tg_info = TaskGraspInfo("data/taskgrasp")
+    scene_name = "140_spatula-view2"
+    scene = Scene(SCANS_DIR, scene_name, 0.0)
 
-    if not isinstance(evaluator, MolmoPointingGraspEvaluator):
-        grasps = grasps[np.random.choice(len(grasps), 16, replace=False)]
+    # if not isinstance(evaluator, MolmoPointingGraspEvaluator):
+    #     grasps = grasps[np.random.choice(len(grasps), 16, replace=False)]
 
-    grasp_idx = evaluator.choose_grasp("grasp a pan to saute something", rgb, depth, cam_info, grasps)
+    idxs = [1,3,11,14]
+    info = {}
+    evaluator.scene = scene.name
+    evaluator.count = 0
+    grasp_idx = evaluator.choose_grasp(tg_info.get_task(scene.obj_name), scene.rgb, scene.depth, scene.cam_info, scene.grasps[idxs], info_out=info)
+    grasp_idx = idxs[grasp_idx]
     print("Chose grasp:", grasp_idx)
-    gr = GraspRenderer(rgb, depth, cam_info)
-    img = gr.render([grasps[grasp_idx]], [[0, 255, 0]])
+    print(info)
+    gr = GraspRenderer(scene.rgb, scene.depth, scene.cam_info)
+    img = gr.render([scene.grasps[grasp_idx]], [[0, 255, 0]])
     Image.fromarray(img).save("chosen_grasp.png")
 
-    render_grasps = grasps[np.random.choice(len(grasps), min(32, len(grasps)), replace=False)]
+    render_grasps = scene.grasps[np.random.choice(len(scene.grasps), min(32, len(scene.grasps)), replace=False)]
     img = gr.render(render_grasps, np.array([[255, 0, 0]]*len(render_grasps)))
     Image.fromarray(img).save("all_grasps.png")
 
@@ -394,7 +432,7 @@ def main():
         evaluator = MolmoGraspEvaluator()
     elif args.evaluator == "openai":
         evaluator = OpenAIGraspEvaluator()
-        test_openai(evaluator)
+        # test_openai(evaluator)
     elif args.evaluator == "molmo_pointing":
         evaluator = MolmoPointingGraspEvaluator()
     else:
@@ -402,7 +440,7 @@ def main():
     import open3d as o3d
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
     # test_infer(evaluator)
-    # test_choose_grasp(evaluator)
+    test_choose_grasp(evaluator)
 
 if __name__ == "__main__":
     main()
