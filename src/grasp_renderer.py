@@ -62,6 +62,7 @@ def create_grasp_mesh(grasp_pose: np.ndarray):
     mesh.transform(grasp_pose)
     mat = o3d.visualization.rendering.MaterialRecord()
     mat.shader = "defaultLit"
+    mat.base_color = [1, 1, 1, 0.9]
     return [{"geometry": mesh, "material": mat}]
 
 def create_grasp(grasp_pose: np.ndarray, color=None):

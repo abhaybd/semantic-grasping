@@ -1,5 +1,6 @@
 import json
 from collections import defaultdict
+import re
 
 import numpy as np
 from PIL import Image
@@ -55,9 +56,13 @@ class Scene:
         self.grasps = self.grasps[self.grasp_confs > grasp_conf_threshold]
 
     @property
+    def is_taskgrasp(self):
+        return re.match(r"\d+_[\w_]+-view\d+", self.name)
+
+    @property
     def obj_name(self):
-        return self.name.split("-")[0]
+        return self.name.split("-")[0] if self.is_taskgrasp else self.name
 
     @property
     def obj_class(self):
-        return self.obj_name.split("_", 1)[1]
+        return self.obj_name.split("_", 1)[1] if self.is_taskgrasp else self.obj_name
