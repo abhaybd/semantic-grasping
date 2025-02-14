@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image
 import argparse
-from grasp_renderer import render_grasps, create_grasp, img_to_pc
+from grasp_renderer import render_grasps, create_grasp, img_to_pc, create_grasp_mesh
 
 import open3d as o3d
 
@@ -35,8 +35,21 @@ def main():
         axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
         geoms = [pcd, axes]
 
-        for grasp in grasps:
-            geoms.extend(create_grasp(grasp, [0, 1, 0]))
+        colors = [[0, 1, 0]] * len(grasps)
+        if "taskgrasp" in data_dir:
+            from taskgrasp_utils import TaskGraspInfo
+            tg_info = TaskGraspInfo("data/taskgrasp")
+            colors = []
+            for i in range(len(grasps)):
+                colors.append([0, 1, 0] if tg_info.get_grasp_classification(obj_name.split("-")[0], i) == 1 else [1, 0, 0])
+        else:
+            grasps = [grasps[np.random.choice(len(grasps))]]
+            colors = [[0, 1, 0]]
+
+        for grasp, color in zip(grasps, colors):
+            geoms.extend(create_grasp(grasp, color))
+        # geoms.extend(create_grasp(grasps[0], [0, 1, 0]))
+        # geoms.extend(create_grasp_mesh(grasps[21]))
         
         o3d.visualization.draw_geometries(geoms, front=[0, 0, -1], lookat=[0, 0, 1], up=[0, -1, 0], zoom=0.25)
     else:
