@@ -43,6 +43,7 @@ class GraspEncoder(nn.Module):
             persistent=False,
         )
         self.xyz_encoder = nn.Sequential(
+            nn.BatchNorm1d(3),
             nn.Linear(3, 256),
             nn.ReLU(),
             nn.Linear(256, 512),
@@ -52,6 +53,7 @@ class GraspEncoder(nn.Module):
 
         # encoder for grasp pose
         self.grasp_pose_encoder = nn.Sequential(
+            nn.BatchNorm1d(12),
             nn.Linear(12, 256),
             nn.ReLU(),
             nn.Linear(256, 512),
@@ -85,7 +87,6 @@ class GraspEncoder(nn.Module):
         patch_xyz_features = patch_features + xyz_features
 
         grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
-        assert grasp_poses.shape == (len(rgbs), 12)
         grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, embed_dim)
         grasp_features = grasp_features + self.grasp_pos_encoding
         grasp_features = grasp_features.unsqueeze(1)  # (B, 1, embed_dim)
