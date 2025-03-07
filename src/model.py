@@ -27,7 +27,7 @@ class SiglipPatchFeatureExtractor(nn.Module):
         return patch_features
 
 
-class GraspTransformer(nn.Module):
+class GraspEncoder(nn.Module):
     def __init__(self, embed_dim=512):
         super().__init__()
         self.embed_dim = embed_dim
@@ -91,8 +91,9 @@ class GraspTransformer(nn.Module):
         grasp_features = grasp_features.unsqueeze(1)  # (B, 1, embed_dim)
 
         input_sequence = torch.cat([patch_xyz_features, grasp_features], dim=1)  # (B, n_patches + 1, embed_dim)
-        
-        output: torch.Tensor = self.transformer_layer(input_sequence, self.query_token)
+
+        query_tokens = self.query_token.repeat(input_sequence.shape[0], 1, 1)
+        output: torch.Tensor = self.transformer_layer(input_sequence, query_tokens)
         return output[:, 0, :]
 
 if __name__ == "__main__":
@@ -102,13 +103,19 @@ if __name__ == "__main__":
         device = "mps"
     else:
         device = "cpu"
-    model = GraspTransformer().to(device)
+    model = GraspEncoder().to(device)
+    model.eval()
+    print(f"Total number of parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Total number of params in transformer: {sum(p.numel() for p in model.transformer_layer.parameters()):,}")
     batch_size = 12
-    rgbs = torch.rand(batch_size, 3, 512, 512).to(device)
-    xyzs = torch.rand(batch_size, 3, 512, 512).to(device)
-    grasp_poses = torch.randn(batch_size, 4, 4).to(device)
-    import time
-    start = time.perf_counter()
-    grasp_features = model(rgbs, xyzs, grasp_poses)
-    print(time.perf_counter() - start)
+    with torch.autocast(device_type=device, dtype=torch.float16):
+        rgbs = torch.rand(batch_size, 3, 512, 512).to(device)
+        xyzs = torch.rand(batch_size, 3, 512, 512).to(device)
+        grasp_poses = torch.randn(batch_size, 4, 4).to(device)
+        with torch.no_grad():
+            import time
+            for _ in range(10):
+                start = time.perf_counter()
+                grasp_features = model(rgbs, xyzs, grasp_poses)
+                print(time.perf_counter() - start)
     print(grasp_features.shape)
