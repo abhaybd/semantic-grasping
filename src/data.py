@@ -1,7 +1,9 @@
+from collections import defaultdict
 from typing import Callable, Optional
 import os
 import pickle
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.v2 as T
@@ -84,6 +86,20 @@ class GraspDescriptionDataset(Dataset):
                 )
             ])
 
+        ground_truth = -np.ones((len(self.data_df), len(self.data_df)), dtype=np.int8)
+        annot_to_idx = defaultdict(list)
+        for i in range(len(self.data_df)):
+            annot_id = self.data_df.iloc[i]['annotation_id']
+            annot_to_idx[annot_id].append(i)
+
+        for idxs in annot_to_idx.values():
+            ground_truth[np.ix_(idxs, idxs)] = 1
+        self._ground_truth = torch.from_numpy(ground_truth)
+
+    @property
+    def ground_truth(self):
+        return self._ground_truth
+
     def __len__(self):
         return len(self.data_df)
 
@@ -114,7 +130,7 @@ class GraspDescriptionDataset(Dataset):
         rgb = self.img_processor(rgb)
 
         return {
-            'annotation_id': row['annotation_id'],
+            'index': idx,
             'text': row['text'],
             'rgb': rgb,
             'xyz': xyz,

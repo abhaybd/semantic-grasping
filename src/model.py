@@ -95,7 +95,8 @@ class GraspEncoder(nn.Module):
 
         query_tokens = self.query_token.repeat(input_sequence.shape[0], 1, 1)
         output: torch.Tensor = self.transformer_layer(input_sequence, query_tokens)
-        return output[:, 0, :]
+        output = output[:, 0, :]
+        return output / torch.linalg.norm(output, dim=-1, keepdim=True)
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
