@@ -1,0 +1,23 @@
+grasp_encoder:
+  embed_dim: 4096
+  xyz_layers: [512, 1024]
+  grasp_layers: [512, 1024]
+  train_vision_model: false
+  transformer:
+    nhead: 8
+    num_encoder_layers: 3
+    num_decoder_layers: 3
+
+train:
+  dataloader:
+    batch_size: 128
+    num_workers: 4
+  dataset:
+    augment: true
+    data_dir: /net/nfs2.prior/abhayd/acronym/data/procgen/observations
+    csv_path: /net/nfs2.prior/abhayd/acronym/data/dataset.csv
+    text_embedding_path: /net/nfs2.prior/abhayd/acronym/data/text_embeddings.npy
+  optimizer:
+    lr: 0.001
+    weight_decay: 0.0001
+  epochs: 100

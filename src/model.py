@@ -1,14 +1,26 @@
-from transformers import AutoModel
+from typing import Any, Optional
+from contextlib import nullcontext
+
+from transformers import AutoModel, AutoProcessor
 import torch
 from torch import nn
 import torch.nn.functional as F
 
+
 class SiglipPatchFeatureExtractor(nn.Module):
     def __init__(self, checkpoint="google/siglip2-large-patch16-512"):
         super().__init__()
+        self.checkpoint = checkpoint
         siglip = AutoModel.from_pretrained(checkpoint)
         self.siglip = siglip.vision_model
         del siglip
+
+    def create_processor(self):
+        processor = AutoProcessor.from_pretrained(self.checkpoint)
+        def fn(rgb):
+            inputs = processor(images=rgb, return_tensors="pt")
+            return inputs["pixel_values"][0]
+        return fn
 
     @property
     def embed_dim(self):
@@ -27,10 +39,43 @@ class SiglipPatchFeatureExtractor(nn.Module):
         return patch_features
 
 
-class GraspEncoder(nn.Module):
-    def __init__(self, embed_dim=512):
+class CustomBatchNorm(nn.Module):
+    def __init__(self, num_features: int, **kwargs):
         super().__init__()
-        self.embed_dim = embed_dim
+        self.num_features = num_features
+        self.batch_norm = nn.BatchNorm1d(num_features, **kwargs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # batch norm expects (batch_size, dim, n_patches), but we have (batch_size, n_patches, dim)
+        need_swap = x.ndim > 2
+        if need_swap:
+            x = x.transpose(-2, -1)
+        x = self.batch_norm(x)
+        if need_swap:
+            x = x.transpose(-2, -1)
+        return x
+
+
+def create_mlp(input_dim: int, output_dim: int, layers: list[int], batch_norm: bool = True):
+    ret = nn.Sequential()
+    if batch_norm:
+        ret.append(CustomBatchNorm(input_dim))
+    layers = [input_dim] + layers
+    for i in range(len(layers) - 1):
+        ret.append(nn.Linear(layers[i], layers[i + 1]))
+        ret.append(nn.ReLU())
+    ret.append(nn.Linear(layers[-1], output_dim))
+    return ret
+
+
+class GraspEncoder(nn.Module):
+    def __init__(self, config: dict[str, Any]):
+        super().__init__()
+
+        self.config = config
+        embed_dim: int = config["embed_dim"]
+        xyz_layers: list[int] = config["xyz_layers"]
+        grasp_layers: list[int] = config["grasp_layers"]
 
         self.feature_extractor = SiglipPatchFeatureExtractor()
         self.feature_encoder = nn.Linear(self.feature_extractor.embed_dim, embed_dim)
@@ -39,45 +84,37 @@ class GraspEncoder(nn.Module):
         # kernel for averaging xyz over patches
         self.register_buffer(
             "xyz_kernel",
-            torch.ones(3, 3, patch_size, patch_size) / patch_size**2 / 3,
+            torch.ones(3, 3, patch_size, patch_size) / patch_size**2,
             persistent=False,
         )
-        self.xyz_encoder = nn.Sequential(
-            nn.BatchNorm1d(3),
-            nn.Linear(3, 256),
-            nn.ReLU(),
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, embed_dim),
-        )
+        # zero out channels of the kernel so that averaging is only within a dimension
+        self.xyz_kernel[0, [1, 2]] = 0
+        self.xyz_kernel[1, [0, 2]] = 0
+        self.xyz_kernel[2, [0, 1]] = 0
+        self.xyz_encoder = create_mlp(3, embed_dim, xyz_layers, batch_norm=True)
 
         # encoder for grasp pose
-        self.grasp_pose_encoder = nn.Sequential(
-            nn.BatchNorm1d(12),
-            nn.Linear(12, 256),
-            nn.ReLU(),
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, embed_dim),
-        )
+        self.grasp_pose_encoder = create_mlp(12, embed_dim, grasp_layers, batch_norm=True)
         self.grasp_pos_encoding = nn.Parameter(torch.randn(1, embed_dim))
 
         self.query_token = nn.Parameter(torch.randn(1, 1, embed_dim))
 
         self.transformer_layer = nn.Transformer(
-            d_model=embed_dim,
-            nhead=8,
-            num_encoder_layers=3,
-            num_decoder_layers=3,
             batch_first=True,
+            d_model=embed_dim,
+            **self.config["transformer"],
         )
+
+    def create_rgb_processor(self):
+        return self.feature_extractor.create_processor()
 
     def forward(self, rgbs: torch.Tensor, xyzs: torch.Tensor, grasp_poses: torch.Tensor):
         """
         Expects (B, 3, H, W) rgbs, (B, 3, H, W) xyzs, (B, 4, 4) grasp_poses
         Returns (B, embed_dim) grasp_features
         """
-        patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
+        with torch.no_grad() if not self.config["train_vision_model"] else nullcontext():
+            patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
         patch_features = self.feature_encoder(patch_features)  # (B, n_patches, embed_dim)
 
         xyz_patch = F.conv2d(xyzs, self.xyz_kernel, stride=self.feature_extractor.patch_size, padding=0)
@@ -105,7 +142,10 @@ if __name__ == "__main__":
         device = "mps"
     else:
         device = "cpu"
-    model = GraspEncoder().to(device)
+    import yaml
+    with open("config/params.yaml", "r") as f:
+        config = yaml.safe_load(f)
+    model = GraspEncoder(config["grasp_encoder"]).to(device)
     model.eval()
     print(f"Total number of parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Total number of params in transformer: {sum(p.numel() for p in model.transformer_layer.parameters()):,}")

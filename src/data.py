@@ -5,16 +5,14 @@ import pickle
 
 import numpy as np
 import torch
+from torch.nn import functional as nnF
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.v2 as T
-from torchvision.transforms.v2 import functional as F
+from torchvision.transforms.v2 import functional as trfF
 
 import pandas as pd
 from PIL import Image
 from scipy.spatial.transform import Rotation as R
-
-DATASET_PATH = "/net/nfs2.prior/abhayd/acronym/data/dataset.csv"
-DATA_DIR = "/net/nfs2.prior/abhayd/acronym/data/procgen/observations"
 
 
 class ImageAugmentation:
@@ -45,7 +43,7 @@ class ImageAugmentation:
 
         # Random horizontal flip
         if torch.rand(1) < self.horizontal_flip_prob:
-            rgb = F.horizontal_flip(rgb)
+            rgb = trfF.horizontal_flip(rgb)
             xyz = torch.flip(xyz, dims=[-1])
             xyz[0] = -xyz[0]  # Flip x-coordinates
             # flip x position of grasp and reflect approach vector
@@ -69,10 +67,18 @@ class ImageAugmentation:
         return rgb, xyz, grasp_pose
 
 
-class GraspDescriptionDataset(Dataset):
-    def __init__(self, csv_path, data_dir, img_processor: Optional[Callable[[Image.Image], torch.Tensor]] = None, augment=True):
+class GraspDescriptionRegressionDataset(Dataset):
+    def __init__(
+        self,
+        csv_path: str,
+        data_dir: str,
+        text_embedding_path: str,
+        img_processor: Optional[Callable[[Image.Image], torch.Tensor]] = None,
+        augment: bool = True
+    ):
         self.data_dir = data_dir
         self.data_df = pd.read_csv(csv_path)
+        self.text_embeddings = np.load(text_embedding_path)
         self.transform = ImageAugmentation() if augment else None
         if img_processor is not None:
             self.img_processor = img_processor
@@ -80,6 +86,7 @@ class GraspDescriptionDataset(Dataset):
             self.img_processor = T.Compose([
                 T.PILToTensor(),
                 T.ToDtype(torch.float32, scale=True),
+                T.Resize((512, 512)),
                 T.Normalize(
                     mean=[0.485, 0.456, 0.406],
                     std=[0.229, 0.224, 0.225]
@@ -129,28 +136,24 @@ class GraspDescriptionDataset(Dataset):
 
         rgb = self.img_processor(rgb)
 
+        if rgb.shape[-2:] != xyz.shape[-2:]:
+            xyz = nnF.interpolate(xyz.unsqueeze(0), size=rgb.shape[-2:], mode='bilinear').squeeze(0)
+
         return {
-            'index': idx,
-            'text': row['text'],
+            'text_embedding': self.text_embeddings[idx],
             'rgb': rgb,
             'xyz': xyz,
             'grasp_pose': grasp_pose
         }
 
-
-def get_dataloader(batch_size=32, num_workers=4, shuffle=True, augment=True):
-    dataset = GraspDescriptionDataset(DATASET_PATH, DATA_DIR, augment=augment)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=shuffle
-    )
-    return dataloader
-
-
 if __name__ == "__main__":
-    dataset = GraspDescriptionDataset(DATASET_PATH, DATA_DIR, augment=True)
-    dataloader = DataLoader(dataset, batch_size=12, shuffle=True)
+    dataset = GraspDescriptionRegressionDataset(
+        csv_path="/net/nfs2.prior/abhayd/acronym/data/dataset.csv",
+        data_dir="/net/nfs2.prior/abhayd/acronym/data/procgen/observations",
+        text_embedding_path="/net/nfs2.prior/abhayd/acronym/data/text_embeddings.npy",
+        augment=True
+    )
+    dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
     batch = next(iter(dataloader))
+    breakpoint()
     print(batch)
