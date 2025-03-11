@@ -11,7 +11,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 from tqdm import tqdm
-from model import GraspEncoder
+from model import GraspEncoder, ParallelWrapper
 from data import GraspDescriptionRegressionDataset
 
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
@@ -37,7 +37,7 @@ def main(config: DictConfig):
 
     model = GraspEncoder(config["grasp_encoder"])
     if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
+        model = ParallelWrapper(model)
     model.cuda()
     model.train()
     print("Compiling model...")

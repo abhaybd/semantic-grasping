@@ -7,6 +7,22 @@ from torch import nn
 import torch.nn.functional as F
 
 
+class ParallelWrapper(nn.Module):
+    def __init__(self, module: nn.Module):
+        super().__init__()
+        self.parallel_module = nn.DataParallel(module)
+
+    def forward(self, *args, **kwargs):
+        return self.parallel_module(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            attr = getattr(self.parallel_module, name)
+        except AttributeError:
+            return getattr(self.parallel_module.module, name)
+        return attr
+
+
 class SiglipPatchFeatureExtractor(nn.Module):
     def __init__(self, checkpoint="google/siglip2-large-patch16-512"):
         super().__init__()
