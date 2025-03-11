@@ -10,7 +10,7 @@ grasp_encoder:
 
 train:
   dataloader:
-    batch_size: 32
+    batch_size: 48
     num_workers: 4
   dataset:
     augment: true

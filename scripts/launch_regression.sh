@@ -11,8 +11,11 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --name $NAME \
     --task-name $NAME \
     --env-secret WANDB_API_KEY=WANDB_API_KEY \
-    --gpus 2 \
-    --dataset $DATASET_NAME=/dataset \
-    --dataset $OBS_DATASET_NAME=/data \
+    --gpus 4 \
+    --dataset abhayd/$DATASET_NAME:/dataset \
+    --dataset abhayd/$OBS_DATASET_NAME:/data \
+    --priority normal \
+    --cluster ai2/ceres-cirrascale \
+    --cluster ai2/prior-elanding \
     -- \
     python src/train_regression.py

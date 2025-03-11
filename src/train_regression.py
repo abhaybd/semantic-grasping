@@ -60,7 +60,7 @@ def main(config: DictConfig):
                 grasp_features = model(rgb, xyz, grasp_pose)
                 infer_end = time.perf_counter()
                 infer_times.append(infer_end - infer_start)
-                batch_loss = F.cosine_similarity(grasp_features, text_embedding, dim=-1)
+                batch_loss = -F.cosine_similarity(grasp_features, text_embedding, dim=-1)
                 loss = batch_loss.mean()
             loss.backward()
             optimizer.step()
