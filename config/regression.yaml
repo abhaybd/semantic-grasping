@@ -29,5 +29,10 @@ train:
   optimizer:
     lr: 0.001
     weight_decay: 0.0001
+  test:
+    frac: 0.2
+    period: 2
+    batch_size: 128
   epochs: 100
   save_period: 10
+  seed: 42

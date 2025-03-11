@@ -142,6 +142,7 @@ class GraspDescriptionRegressionDataset(Dataset):
             xyz = nnF.interpolate(xyz.unsqueeze(0), size=rgb.shape[-2:], mode='bilinear').squeeze(0)
 
         return {
+            'annotation_id': row['annotation_id'],
             'text_embedding': self.text_embeddings[idx],
             'rgb': rgb,
             'xyz': xyz,

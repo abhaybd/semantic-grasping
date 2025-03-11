@@ -1,21 +1,63 @@
 import os
 import time
+from typing import Any
 
 import numpy as np
 import torch
+from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.utils.data import random_split
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 from tqdm import tqdm
+
 from model import GraspEncoder, Checkpointer
 from data import GraspDescriptionRegressionDataset
 
+@torch.no_grad()
+@torch.autocast("cuda", dtype=torch.bfloat16)
+def test(model: nn.Module, test_loader: DataLoader):
+    model.eval()
+    losses = []
+    classification_losses = []
+    for batch in tqdm(test_loader, desc="Test", leave=False):
+        rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
+        text_embedding = batch["text_embedding"].cuda()
+        grasp_features = model(rgb, xyz, grasp_pose)
+        batch_loss = -F.cosine_similarity(grasp_features, text_embedding, dim=-1)
+        losses.extend(batch_loss.tolist())
+
+        pairwise_similarity = text_embedding @ grasp_features.T  # (i, j) => i-th text embedding, j-th grasp feature
+
+        annotation_ids = batch["annotation_id"]
+        annotation_id_idxs: dict[str, list[int]] = {}
+        for i, annotation_id in enumerate(annotation_ids):
+            if annotation_id not in annotation_id_idxs:
+                annotation_id_idxs[annotation_id] = []
+            annotation_id_idxs[annotation_id].append(i)
+        gt_matrix = torch.zeros_like(pairwise_similarity)
+        for i, annot_id in enumerate(annotation_ids):
+            gt_matrix[i, annotation_id_idxs[annot_id]] = 1.0
+        scene_classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
+        classification_losses.extend(scene_classification_loss.item())
+    return {"loss": np.mean(losses), "classification_loss": np.mean(classification_losses)}
+
+def nested_dict_to_flat_dict(d: dict[str, Any], pfx: str = ""):
+    flat_dict = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            flat_dict.update(nested_dict_to_flat_dict(v, pfx=f"{pfx}{k}/"))
+        else:
+            flat_dict[f"{pfx}{k}"] = v
+    return flat_dict
+
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
+    torch.manual_seed(config["train"]["seed"])
     print(OmegaConf.to_yaml(config))
     out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     ckpt_dir = os.path.join(out_dir, "checkpoints")
@@ -49,7 +91,15 @@ def main(config: DictConfig):
 
     img_processor = model.module.create_rgb_processor()
     dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
-    train_loader = DataLoader(dataset, shuffle=True, **config["train"]["dataloader"])
+    test_frac = config["train"]["test"]["frac"]
+    if test_frac > 0:
+        gen = torch.Generator().manual_seed(config["train"]["seed"])
+        train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
+        train_loader = DataLoader(train_dataset, shuffle=True, **config["train"]["dataloader"])
+        test_loader = DataLoader(test_dataset, shuffle=False, **config["train"]["dataloader"])
+    else:
+        train_loader = DataLoader(dataset, shuffle=True, **config["train"]["dataloader"])
+        test_loader = None
 
     optimizer = optim.Adam(model.parameters(), **config["train"]["optimizer"])
 
@@ -73,8 +123,16 @@ def main(config: DictConfig):
             loss.backward()
             optimizer.step()
             losses.extend(batch_loss.tolist())
+        info = {
+            "loss": np.mean(losses),
+            "infer_time": np.mean(infer_times),
+        }
 
-        run.log({"loss": np.mean(losses), "infer_time": np.mean(infer_times)})
+        if config["train"]["test"]["period"] and epoch % config["train"]["test"]["period"] == 0:
+            test_results = test(model, test_loader)
+            info["test"] = test_results
+
+        run.log(nested_dict_to_flat_dict(info))
 
         if config["train"]["save_period"] and epoch % config["train"]["save_period"] == 0:
             checkpointer.save(epoch)
