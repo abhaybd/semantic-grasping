@@ -26,7 +26,7 @@ def test(model: nn.Module, test_loader: DataLoader):
     classification_losses = []
     for batch in tqdm(test_loader, desc="Test", leave=False):
         rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
-        text_embedding = batch["text_embedding"].cuda()
+        text_embedding = batch["text_embedding"].float().cuda()
         grasp_features = model(rgb, xyz, grasp_pose)
         batch_loss = -F.cosine_similarity(grasp_features, text_embedding, dim=-1)
         losses.extend(batch_loss.tolist())
@@ -43,7 +43,7 @@ def test(model: nn.Module, test_loader: DataLoader):
         for i, annot_id in enumerate(annotation_ids):
             gt_matrix[i, annotation_id_idxs[annot_id]] = 1.0
         scene_classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
-        classification_losses.extend(scene_classification_loss.item())
+        classification_losses.append(scene_classification_loss.item())
     return {"loss": np.mean(losses), "classification_loss": np.mean(classification_losses)}
 
 def nested_dict_to_flat_dict(d: dict[str, Any], pfx: str = ""):
