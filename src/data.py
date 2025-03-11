@@ -74,12 +74,14 @@ class GraspDescriptionRegressionDataset(Dataset):
         data_dir: str,
         text_embedding_path: str,
         img_processor: Optional[Callable[[Image.Image], torch.Tensor]] = None,
-        augment: bool = True
+        augment: bool = True,
+        augmentation_params: Optional[dict] = None
     ):
         self.data_dir = data_dir
         self.data_df = pd.read_csv(csv_path)
         self.text_embeddings = np.load(text_embedding_path)
-        self.transform = ImageAugmentation() if augment else None
+        aug_params = augmentation_params or {}
+        self.transform = ImageAugmentation(**aug_params) if augment else None
         if img_processor is not None:
             self.img_processor = img_processor
         else:

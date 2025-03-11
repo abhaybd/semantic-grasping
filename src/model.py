@@ -1,11 +1,48 @@
+import os
 from typing import Any, Optional
 from contextlib import nullcontext
 
 from transformers import AutoModel, AutoProcessor
 import torch
 from torch import nn
+from torch import optim
 import torch.nn.functional as F
 
+
+class Checkpointer:
+    def __init__(self, ckpt_dir: str, model: nn.Module, opt: optim.Optimizer):
+        self.ckpt_dir = ckpt_dir
+        self.model = model
+        self.opt = opt
+
+    def save(self, epoch: int):
+        ckpt = {
+            "model": self.model.state_dict(),
+            "opt": self.opt.state_dict(),
+            "epoch": epoch
+        }
+        torch.save(ckpt, os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth"))
+
+    def load(self, epoch: int | None = None) -> int:
+        if epoch is None:
+            epochs = []
+            for f in os.listdir(self.ckpt_dir):
+                if f.startswith("   ") and f.endswith(".pth"):
+                    e = int(f[:-len(".pth")].split("_")[-1])
+                    epochs.append(e)
+            for e in sorted(epochs, reverse=True):
+                ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{e}.pth")
+                if os.path.isfile(ckpt_path):
+                    epoch = e
+                    break
+            else:
+                return 0
+        else:
+            ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth")
+        ckpt = torch.load(ckpt_path)
+        self.model.load_state_dict(ckpt["model"])
+        self.opt.load_state_dict(ckpt["opt"])
+        return epoch
 
 class SiglipPatchFeatureExtractor(nn.Module):
     def __init__(self, checkpoint="google/siglip2-large-patch16-512"):

@@ -11,13 +11,15 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 from tqdm import tqdm
-from model import GraspEncoder
+from model import GraspEncoder, Checkpointer
 from data import GraspDescriptionRegressionDataset
 
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
     out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    ckpt_dir = os.path.join(out_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
 
     if "GANTRY_TASK_NAME" in os.environ:
         task_name = os.environ["GANTRY_TASK_NAME"]
@@ -26,13 +28,16 @@ def main(config: DictConfig):
     else:
         task_name = None
 
+    run_id = os.environ.get("BEAKER_EXPERIMENT_ID", None)
     run = wandb.init(
         entity="prior-ai2",
         project="semantic-grasping",
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         name=task_name,
         dir=out_dir,
-        job_type="train"
+        job_type="train",
+        id=run_id,
+        resume="allow"
     )
 
     model = torch.nn.DataParallel(GraspEncoder(config["grasp_encoder"]))
@@ -48,7 +53,10 @@ def main(config: DictConfig):
 
     optimizer = optim.Adam(model.parameters(), **config["train"]["optimizer"])
 
-    for _ in tqdm(range(config["train"]["epochs"])):
+    checkpointer = Checkpointer(ckpt_dir, model, optimizer)
+    start_epoch = checkpointer.load()
+
+    for epoch in tqdm(range(start_epoch, config["train"]["epochs"]), total=config["train"]["epochs"], initial=start_epoch):
         losses = []
         infer_times = []
         for batch in tqdm(train_loader, desc="Batch", leave=False):
@@ -65,7 +73,11 @@ def main(config: DictConfig):
             loss.backward()
             optimizer.step()
             losses.extend(batch_loss.tolist())
+
         run.log({"loss": np.mean(losses), "infer_time": np.mean(infer_times)})
+
+        if config["train"]["save_period"] and epoch % config["train"]["save_period"] == 0:
+            checkpointer.save(epoch)
 
     save_path = os.path.join(out_dir, "grasp_encoder.pt")
     torch.save(model.state_dict(), save_path)
