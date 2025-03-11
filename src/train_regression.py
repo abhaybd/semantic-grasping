@@ -14,22 +14,25 @@ from tqdm import tqdm
 from model import GraspEncoder
 from data import GraspDescriptionRegressionDataset
 
-@hydra.main(version_base=None, config_path="../config", config_name="params.yaml")
+@hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
     out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+
+    task_name = os.getenv("GANTRY_TASK_NAME", config["name"])
 
     run = wandb.init(
         entity="prior-ai2",
         project="semantic-grasping",
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
-        name=config["name"],
+        name=task_name,
         dir=out_dir,
         job_type="train"
     )
 
-    # TODO: Add torch parallelism
     model = GraspEncoder(config["grasp_encoder"])
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
     model.cuda()
     model.train()
     print("Compiling model...")
@@ -54,7 +57,6 @@ def main(config: DictConfig):
                 grasp_features = model(rgb, xyz, grasp_pose)
                 infer_end = time.perf_counter()
                 infer_times.append(infer_end - infer_start)
-                print(f"infer time: {infer_end - infer_start}")
                 batch_loss = F.cosine_similarity(grasp_features, text_embedding, dim=-1)
                 loss = batch_loss.mean()
             loss.backward()

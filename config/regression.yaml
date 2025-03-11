@@ -14,9 +14,9 @@ train:
     num_workers: 4
   dataset:
     augment: true
-    data_dir: /net/nfs2.prior/abhayd/acronym/data/procgen/observations
-    csv_path: /net/nfs2.prior/abhayd/acronym/data/dataset.csv
-    text_embedding_path: /net/nfs2.prior/abhayd/acronym/data/text_embeddings.npy
+    data_dir: /data/observations
+    csv_path: /dataset/dataset.csv
+    text_embedding_path: /dataset/text_embeddings.npy
   optimizer:
     lr: 0.001
     weight_decay: 0.0001
