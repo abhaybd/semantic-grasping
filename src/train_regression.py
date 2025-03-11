@@ -19,7 +19,12 @@ def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
     out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
 
-    task_name = os.getenv("GANTRY_TASK_NAME", config["name"])
+    if "GANTRY_TASK_NAME" in os.environ:
+        task_name = os.environ["GANTRY_TASK_NAME"]
+    elif "name" in config:
+        task_name = config["name"]
+    else:
+        task_name = None
 
     run = wandb.init(
         entity="prior-ai2",
