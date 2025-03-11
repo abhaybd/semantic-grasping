@@ -10,11 +10,11 @@ grasp_encoder:
 
 train:
   dataloader:
-    batch_size: 128
+    batch_size: 32
     num_workers: 4
   dataset:
     augment: true
-    data_dir: /data/observations
+    data_dir: /data
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
   optimizer:
