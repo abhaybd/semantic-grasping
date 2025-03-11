@@ -42,8 +42,8 @@ def test(model: nn.Module, test_loader: DataLoader):
         gt_matrix = torch.zeros_like(pairwise_similarity)
         for i, annot_id in enumerate(annotation_ids):
             gt_matrix[i, annotation_id_idxs[annot_id]] = 1.0
-        scene_classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
-        classification_losses.append(scene_classification_loss.item())
+        classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
+        classification_losses.append(classification_loss.item())
     return {"loss": np.mean(losses), "classification_loss": np.mean(classification_losses)}
 
 def nested_dict_to_flat_dict(d: dict[str, Any], pfx: str = ""):
@@ -91,6 +91,7 @@ def main(config: DictConfig):
 
     img_processor = model.module.create_rgb_processor()
     dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
+    dataset = torch.utils.data.Subset(dataset, np.random.choice(len(dataset), size=100, replace=False))  # TODO: remove this
     test_frac = config["train"]["test"]["frac"]
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
