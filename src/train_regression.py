@@ -90,7 +90,6 @@ def main(config: DictConfig):
 
     img_processor = model.module.create_rgb_processor()
     dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
-    dataset = torch.utils.data.Subset(dataset, np.random.choice(len(dataset), size=16, replace=False))  # TODO: remove this
     test_frac = config["train"]["test"]["frac"]
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
