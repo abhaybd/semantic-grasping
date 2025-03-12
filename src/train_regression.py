@@ -15,7 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 import wandb
 from tqdm import tqdm
 
-from model import GraspEncoder, Checkpointer
+from model import GraspEncoder, Checkpointer, WarmupCosineLR
 from data import GraspDescriptionRegressionDataset
 
 @torch.no_grad()
@@ -24,12 +24,14 @@ def test(model: nn.Module, test_loader: DataLoader):
     model.eval()
     losses = []
     classification_losses = []
+    variances = []
     for batch in tqdm(test_loader, desc="Test", leave=False):
         rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
         text_embedding = batch["text_embedding"].float().cuda()
         grasp_features = model(rgb, xyz, grasp_pose)
-        batch_loss = -F.cosine_similarity(grasp_features, text_embedding, dim=-1)
+        batch_loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1)
         losses.extend(batch_loss.tolist())
+        variances.append(torch.var(grasp_features, dim=0).mean().item())
 
         pairwise_similarity = text_embedding @ grasp_features.T  # (i, j) => i-th text embedding, j-th grasp feature
 
@@ -44,7 +46,11 @@ def test(model: nn.Module, test_loader: DataLoader):
             gt_matrix[i, annotation_id_idxs[annot_id]] = 1.0
         classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
         classification_losses.append(classification_loss.item())
-    return {"loss": np.mean(losses), "classification_loss": np.mean(classification_losses)}
+    return {
+        "loss": np.mean(losses),
+        "classification_loss": np.mean(classification_losses),
+        "variance": np.mean(variances),
+    }
 
 def nested_dict_to_flat_dict(d: dict[str, Any], pfx: str = ""):
     flat_dict = {}
@@ -101,9 +107,9 @@ def main(config: DictConfig):
         test_loader = None
 
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
-    lr_scheduler = optim.lr_scheduler.LinearLR(optimizer, total_iters=config["train"]["epochs"] // 10)
+    lr_scheduler = WarmupCosineLR(optimizer, config["train"]["warmup_epochs"], config["train"]["epochs"])
 
-    checkpointer = Checkpointer(ckpt_dir, model, optimizer)
+    checkpointer = Checkpointer(ckpt_dir, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler)
     start_epoch = checkpointer.load()
 
     for epoch in tqdm(range(start_epoch, config["train"]["epochs"]), total=config["train"]["epochs"], initial=start_epoch):
@@ -121,18 +127,18 @@ def main(config: DictConfig):
                 infer_end = time.perf_counter()
                 infer_times.append(infer_end - infer_start)
                 loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1).mean()
-            variances.append(torch.var(grasp_features, dim=0).mean().item())
+            with torch.no_grad():
+                variances.append(torch.var(grasp_features, dim=0).mean().item())
             losses.append(loss.item())
             loss.backward()
             optimizer.step()
-            lr_scheduler.step()
+        lr_scheduler.step()
         info = {
             "loss": np.mean(losses),
-            "lr": optimizer.param_groups[0]["lr"],
+            "lr": np.mean(lr_scheduler.get_last_lr()),
             "variance": np.mean(variances),
             "infer_time": np.mean(infer_times),
         }
-        print(" loss", np.mean(losses), "variance", np.mean(variances))
 
         if test_loader is not None and config["train"]["test"]["period"] and epoch % config["train"]["test"]["period"] == 0:
             test_results = test(model, test_loader)

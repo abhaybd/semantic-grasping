@@ -16,7 +16,7 @@ grasp_encoder:
 
 train:
   dataloader:
-    batch_size: 48
+    batch_size: 64
     num_workers: 4
   dataset:
     augment: false
@@ -35,6 +35,7 @@ train:
     frac: 0.2
     period: 2
     batch_size: 128
+  warmup_epochs: 20
   epochs: 200
   save_period: 10
   seed: 42

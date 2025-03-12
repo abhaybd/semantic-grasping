@@ -1,5 +1,6 @@
 import os
-from typing import Any
+from typing import Any, Protocol
+import math
 from contextlib import nullcontext
 
 from transformers import AutoModel, AutoProcessor
@@ -9,17 +10,23 @@ from torch import optim
 import torch.nn.functional as F
 
 
+class StateDictProtocol(Protocol):
+    def state_dict(self) -> dict[str, Any]:
+        ...
+
+    def load_state_dict(self, state_dict: dict[str, Any]):
+        ...
+
+
 class Checkpointer:
-    def __init__(self, ckpt_dir: str, model: nn.Module, opt: optim.Optimizer):
+    def __init__(self, ckpt_dir: str, **modules: StateDictProtocol):
         self.ckpt_dir = ckpt_dir
-        self.model = model
-        self.opt = opt
+        self.modules = modules
 
     def save(self, epoch: int):
         ckpt = {
-            "model": self.model.state_dict(),
-            "opt": self.opt.state_dict(),
-            "epoch": epoch
+            "epoch": epoch,
+            **{k: v.state_dict() for k, v in self.modules.items()}
         }
         torch.save(ckpt, os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth"))
 
@@ -40,9 +47,20 @@ class Checkpointer:
         else:
             ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth")
         ckpt = torch.load(ckpt_path)
-        self.model.load_state_dict(ckpt["model"])
-        self.opt.load_state_dict(ckpt["opt"])
+        for k, v in self.modules.items():
+            v.load_state_dict(ckpt[k])
         return epoch
+
+class WarmupCosineLR(torch.optim.lr_scheduler.LambdaLR):
+    def __init__(self, optimizer, warmup_steps, total_steps):
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return (step + 1) / warmup_steps  # Linear warmup
+            else:
+                decay_ratio = (step - warmup_steps) / (total_steps - warmup_steps)
+                return 0.5 * (1 + math.cos(math.pi * decay_ratio))  # Cosine decay
+
+        super().__init__(optimizer, lr_lambda)
 
 class SiglipPatchFeatureExtractor(nn.Module):
     def __init__(self, checkpoint="google/siglip2-large-patch16-512"):
