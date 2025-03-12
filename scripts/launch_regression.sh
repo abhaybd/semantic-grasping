@@ -4,8 +4,8 @@ if [ $# -ne 1 ]; then
 fi
 
 NAME=$1
-DATASET_NAME=dataset_0310_1749
-OBS_DATASET_NAME=obsgen_0310_1650
+DATASET_NAME=dataset_0311_1749
+OBS_DATASET_NAME=obsgen_0311_1420
 
 gantry run -w ai2/abhayd -b ai2/prior \
     --name $NAME \

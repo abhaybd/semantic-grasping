@@ -1,7 +1,6 @@
 from collections import defaultdict
 from typing import Callable, Optional
 import os
-import pickle
 
 import numpy as np
 import torch
@@ -112,22 +111,12 @@ class GraspDescriptionRegressionDataset(Dataset):
     def __len__(self):
         return len(self.data_df)
 
-    def _load_obs(self, pkl_path: str):
-        with open(pkl_path, 'rb') as f:
-            observation_data = pickle.load(f)
-
-        rgb = observation_data['rgb']  # (H, W, 3)
-        xyz = observation_data['xyz']  # (H, W, 3)
-        grasp_pose = observation_data['grasp_pose']  # 4x4 transform matrix
-        return rgb, xyz, grasp_pose
-
     def __getitem__(self, idx):
         row = self.data_df.iloc[idx]
 
-        pkl_path = os.path.join(self.data_dir, row['observation_path'])
-        rgb, xyz, grasp_pose = self._load_obs(pkl_path)
-
-        rgb = Image.fromarray(rgb)
+        rgb = Image.open(os.path.join(self.data_dir, row["rgb_path"])).convert("RGB")
+        xyz = np.load(os.path.join(self.data_dir, row["xyz_path"]))
+        grasp_pose = np.load(os.path.join(self.data_dir, row["grasp_pose_path"]))
 
         xyz: torch.Tensor = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
@@ -151,9 +140,9 @@ class GraspDescriptionRegressionDataset(Dataset):
 
 if __name__ == "__main__":
     dataset = GraspDescriptionRegressionDataset(
-        csv_path="/net/nfs2.prior/abhayd/acronym/data/dataset.csv",
-        data_dir="/net/nfs2.prior/abhayd/acronym/data/procgen/observations",
-        text_embedding_path="/net/nfs2.prior/abhayd/acronym/data/text_embeddings.npy",
+        csv_path="/net/nfs2.prior/abhayd/datasets/dataset.csv",
+        data_dir="/net/nfs2.prior/abhayd/datasets",
+        text_embedding_path="/net/nfs2.prior/abhayd/datasets/text_embeddings.npy",
         augment=True
     )
     dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
