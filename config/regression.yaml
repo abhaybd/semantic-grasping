@@ -35,7 +35,9 @@ train:
     frac: 0.2
     period: 2
     batch_size: 128
-  warmup_epochs: 20
+  lr_schedule:
+    warmup_epochs: 20
+    final_factor: 0.1
   epochs: 200
   save_period: 10
   seed: 42

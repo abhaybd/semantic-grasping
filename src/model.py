@@ -34,16 +34,12 @@ class Checkpointer:
         if epoch is None:
             epochs = []
             for f in os.listdir(self.ckpt_dir):
-                if f.startswith("   ") and f.endswith(".pth"):
+                if f.startswith("ckpt_") and f.endswith(".pth"):
                     e = int(f[:-len(".pth")].split("_")[-1])
                     epochs.append(e)
-            for e in sorted(epochs, reverse=True):
-                ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{e}.pth")
-                if os.path.isfile(ckpt_path):
-                    epoch = e
-                    break
-            else:
+            if len(epochs) == 0:
                 return 0
+            epoch = max(epochs)
         else:
             ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth")
         ckpt = torch.load(ckpt_path)
@@ -52,13 +48,13 @@ class Checkpointer:
         return epoch
 
 class WarmupCosineLR(torch.optim.lr_scheduler.LambdaLR):
-    def __init__(self, optimizer, warmup_steps, total_steps):
+    def __init__(self, optimizer: optim.Optimizer, warmup_steps: int, total_steps: int, final_factor: float = 0.1):
         def lr_lambda(step):
             if step < warmup_steps:
                 return (step + 1) / warmup_steps  # Linear warmup
             else:
                 decay_ratio = (step - warmup_steps) / (total_steps - warmup_steps)
-                return 0.5 * (1 + math.cos(math.pi * decay_ratio))  # Cosine decay
+                return final_factor + 0.5 * (1 - final_factor) * (1 + math.cos(math.pi * decay_ratio))  # Cosine decay
 
         super().__init__(optimizer, lr_lambda)
 

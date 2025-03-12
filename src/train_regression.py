@@ -107,7 +107,12 @@ def main(config: DictConfig):
         test_loader = None
 
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
-    lr_scheduler = WarmupCosineLR(optimizer, config["train"]["warmup_epochs"], config["train"]["epochs"])
+    lr_scheduler = WarmupCosineLR(
+        optimizer,
+        config["train"]["lr_schedule"]["warmup_epochs"],
+        config["train"]["epochs"],
+        config["train"]["lr_schedule"]["final_factor"]
+    )
 
     checkpointer = Checkpointer(ckpt_dir, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler)
     start_epoch = checkpointer.load()
