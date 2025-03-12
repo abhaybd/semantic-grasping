@@ -1,5 +1,5 @@
 import os
-from typing import Any, Optional
+from typing import Any
 from contextlib import nullcontext
 
 from transformers import AutoModel, AutoProcessor
@@ -75,6 +75,10 @@ class SiglipPatchFeatureExtractor(nn.Module):
         patch_features = outputs.last_hidden_state
         return patch_features
 
+    def embed(self, rgbs):
+        outputs = self.siglip(pixel_values=rgbs)
+        return outputs.pooler_output
+
 
 class CustomBatchNorm(nn.Module):
     def __init__(self, num_features: int, **kwargs):
@@ -93,7 +97,7 @@ class CustomBatchNorm(nn.Module):
         return x
 
 
-def create_mlp(input_dim: int, output_dim: int, layers: list[int], batch_norm: bool = True):
+def create_mlp(input_dim: int, output_dim: int, layers: list[int], batch_norm: bool = False):
     ret = nn.Sequential()
     if batch_norm:
         ret.append(CustomBatchNorm(input_dim))
@@ -110,12 +114,14 @@ class GraspEncoder(nn.Module):
         super().__init__()
 
         self.config = config
+        hidden_dim: int = config["hidden_dim"]
         embed_dim: int = config["embed_dim"]
+        feature_layers: list[int] = config["feature_layers"]
         xyz_layers: list[int] = config["xyz_layers"]
         grasp_layers: list[int] = config["grasp_layers"]
-
+        final_fc_layers: list[int] = config["final_fc_layers"]
         self.feature_extractor = SiglipPatchFeatureExtractor()
-        self.feature_encoder = nn.Linear(self.feature_extractor.embed_dim, embed_dim)
+        self.feature_encoder = create_mlp(self.feature_extractor.embed_dim, hidden_dim, feature_layers)
 
         patch_size = self.feature_extractor.patch_size
         # kernel for averaging xyz over patches
@@ -128,19 +134,24 @@ class GraspEncoder(nn.Module):
         self.xyz_kernel[0, [1, 2]] = 0
         self.xyz_kernel[1, [0, 2]] = 0
         self.xyz_kernel[2, [0, 1]] = 0
-        self.xyz_encoder = create_mlp(3, embed_dim, xyz_layers, batch_norm=True)
+        self.xyz_encoder = create_mlp(3, hidden_dim, xyz_layers, batch_norm=False)
 
         # encoder for grasp pose
-        self.grasp_pose_encoder = create_mlp(12, embed_dim, grasp_layers, batch_norm=True)
-        self.grasp_pos_encoding = nn.Parameter(torch.randn(1, embed_dim))
+        self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers, batch_norm=False)
+        self.grasp_pos_encoding = nn.Parameter(torch.randn(1, hidden_dim))
 
-        self.query_token = nn.Parameter(torch.randn(1, 1, embed_dim))
-
-        self.transformer_layer = nn.Transformer(
-            batch_first=True,
-            d_model=embed_dim,
-            **self.config["transformer"],
+        self.query_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
+        self.trf_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=self.config["transformer"]["nhead"],
+                dim_feedforward=int(hidden_dim * 4),
+                dropout=0.0,
+                batch_first=True
+            ),
+            num_layers=self.config["transformer"]["num_encoder_layers"]
         )
+        self.final_fc = create_mlp(hidden_dim, embed_dim, final_fc_layers)
 
     def create_rgb_processor(self):
         return self.feature_extractor.create_processor()
@@ -152,24 +163,26 @@ class GraspEncoder(nn.Module):
         """
         with torch.no_grad() if not self.config["train_vision_model"] else nullcontext():
             patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
-        patch_features = self.feature_encoder(patch_features)  # (B, n_patches, embed_dim)
+        patch_features = self.feature_encoder(patch_features)  # (B, n_patches, hidden_dim)
 
         xyz_patch = F.conv2d(xyzs, self.xyz_kernel, stride=self.feature_extractor.patch_size, padding=0)
         xyz_patch = xyz_patch.reshape(len(xyz_patch), 3, -1).transpose(1, 2)  # (B, n_patches, 3)
-        xyz_features = self.xyz_encoder(xyz_patch)  # (B, n_patches, embed_dim)
+        xyz_features = self.xyz_encoder(xyz_patch)  # (B, n_patches, hidden_dim)
 
         patch_xyz_features = patch_features + xyz_features
 
         grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
-        grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, embed_dim)
+        grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)
         grasp_features = grasp_features + self.grasp_pos_encoding
-        grasp_features = grasp_features.unsqueeze(1)  # (B, 1, embed_dim)
+        grasp_features = grasp_features.unsqueeze(1)  # (B, 1, hidden_dim)
 
-        input_sequence = torch.cat([patch_xyz_features, grasp_features], dim=1)  # (B, n_patches + 1, embed_dim)
+        input_sequence = torch.cat([patch_xyz_features, grasp_features], dim=1)  # (B, n_patches + 1, hidden_dim)
 
-        query_tokens = self.query_token.repeat(input_sequence.shape[0], 1, 1)
-        output: torch.Tensor = self.transformer_layer(input_sequence, query_tokens)
+        query_tokens = self.query_token.repeat(input_sequence.shape[0], 1, 1)  # (B, 1, hidden_dim)
+        sequence = torch.cat([query_tokens, input_sequence], dim=1)
+        output = self.trf_encoder(sequence)
         output = output[:, 0, :]
+        output = self.final_fc(output)
         return output / torch.linalg.norm(output, dim=-1, keepdim=True)
 
 if __name__ == "__main__":

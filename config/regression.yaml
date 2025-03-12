@@ -4,13 +4,15 @@ hydra:
 
 grasp_encoder:
   embed_dim: 4096
-  xyz_layers: [512, 1024]
-  grasp_layers: [512, 1024]
+  hidden_dim: 512
+  feature_layers: [2048, 2048]
+  xyz_layers: [256, 256]
+  grasp_layers: [256, 256]
+  final_fc_layers: [2048, 2048]
   train_vision_model: false
   transformer:
-    nhead: 8
+    nhead: 4
     num_encoder_layers: 3
-    num_decoder_layers: 3
 
 train:
   dataloader:
@@ -27,12 +29,12 @@ train:
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
   optimizer:
-    lr: 0.001
-    weight_decay: 0.0001
+    lr: 0.0002
+    # weight_decay: 0.0
   test:
     frac: 0.2
     period: 2
     batch_size: 128
-  epochs: 100
+  epochs: 200
   save_period: 10
   seed: 42

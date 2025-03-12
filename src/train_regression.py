@@ -84,14 +84,13 @@ def main(config: DictConfig):
 
     model = torch.nn.DataParallel(GraspEncoder(config["grasp_encoder"]))
     model.cuda()
-    model.train()
     print("Compiling model...")
     torch.compile(model)
     print("Done!")
 
     img_processor = model.module.create_rgb_processor()
     dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
-    dataset = torch.utils.data.Subset(dataset, np.random.choice(len(dataset), size=100, replace=False))  # TODO: remove this
+    dataset = torch.utils.data.Subset(dataset, np.random.choice(len(dataset), size=16, replace=False))  # TODO: remove this
     test_frac = config["train"]["test"]["frac"]
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
@@ -102,7 +101,8 @@ def main(config: DictConfig):
         train_loader = DataLoader(dataset, shuffle=True, **config["train"]["dataloader"])
         test_loader = None
 
-    optimizer = optim.Adam(model.parameters(), **config["train"]["optimizer"])
+    optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
+    lr_scheduler = optim.lr_scheduler.LinearLR(optimizer, total_iters=config["train"]["epochs"] // 10)
 
     checkpointer = Checkpointer(ckpt_dir, model, optimizer)
     start_epoch = checkpointer.load()
@@ -110,6 +110,8 @@ def main(config: DictConfig):
     for epoch in tqdm(range(start_epoch, config["train"]["epochs"]), total=config["train"]["epochs"], initial=start_epoch):
         losses = []
         infer_times = []
+        variances = []
+        model.train()
         for batch in tqdm(train_loader, desc="Batch", leave=False):
             optimizer.zero_grad()
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -119,17 +121,21 @@ def main(config: DictConfig):
                 grasp_features = model(rgb, xyz, grasp_pose)
                 infer_end = time.perf_counter()
                 infer_times.append(infer_end - infer_start)
-                batch_loss = -F.cosine_similarity(grasp_features, text_embedding, dim=-1)
-                loss = batch_loss.mean()
+                loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1).mean()
+            variances.append(torch.var(grasp_features, dim=0).mean().item())
+            losses.append(loss.item())
             loss.backward()
             optimizer.step()
-            losses.extend(batch_loss.tolist())
+            lr_scheduler.step()
         info = {
             "loss": np.mean(losses),
+            "lr": optimizer.param_groups[0]["lr"],
+            "variance": np.mean(variances),
             "infer_time": np.mean(infer_times),
         }
+        print(" loss", np.mean(losses), "variance", np.mean(variances))
 
-        if config["train"]["test"]["period"] and epoch % config["train"]["test"]["period"] == 0:
+        if test_loader is not None and config["train"]["test"]["period"] and epoch % config["train"]["test"]["period"] == 0:
             test_results = test(model, test_loader)
             info["test"] = test_results
 
