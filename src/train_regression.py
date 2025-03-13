@@ -61,6 +61,14 @@ def nested_dict_to_flat_dict(d: dict[str, Any], pfx: str = ""):
             flat_dict[f"{pfx}{k}"] = v
     return flat_dict
 
+def build_wandb_config(config: DictConfig):
+    wandb_config = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+    wandb_config["env"] = {
+        **{k: v for k, v in os.environ.items() if k.startswith("GANTRY_")},
+        **{k: v for k, v in os.environ.items() if k.startswith("BEAKER_")},
+    }
+    return wandb_config
+
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
     torch.manual_seed(config["train"]["seed"])
@@ -80,7 +88,7 @@ def main(config: DictConfig):
     run = wandb.init(
         entity="prior-ai2",
         project="semantic-grasping",
-        config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
+        config=build_wandb_config(config),
         name=task_name,
         dir=out_dir,
         job_type="train",
