@@ -16,10 +16,10 @@ grasp_encoder:
 
 train:
   dataloader:
-    batch_size: 64
+    batch_size: 96
     num_workers: 4
   dataset:
-    augment: false
+    augment: true
     augmentation_params:
       color_jitter_prob: 0.8
       gray_scale_prob: 0.1
