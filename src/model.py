@@ -2,6 +2,8 @@ import os
 from typing import Any, Protocol
 import math
 from contextlib import nullcontext
+import tempfile
+import yaml
 
 from transformers import AutoModel, AutoProcessor
 import torch
@@ -9,7 +11,7 @@ from torch import nn
 from torch import optim
 import torch.nn.functional as F
 
-
+from nv_embed_v2 import NVEmbedModel
 class StateDictProtocol(Protocol):
     def state_dict(self) -> dict[str, Any]:
         ...
@@ -167,6 +169,24 @@ class GraspEncoder(nn.Module):
         )
         self.final_fc = create_mlp(hidden_dim, embed_dim, final_fc_layers)
 
+    @classmethod
+    def from_wandb(cls, run_id: str, ckpt: int | None = None, map_location="cpu"):
+        assert ckpt is None, "Checkpoint loading not supported yet"
+        import wandb
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_fn = "config.yaml"
+            weights_fn = "grasp_encoder.pt"
+            run_path = f"prior-ai2/semantic-grasping/{run_id}"
+            cfg_file = wandb.restore(config_fn, run_path, root=tmpdir)
+            with open(cfg_file.name, "r") as f:
+                config = yaml.safe_load(f)
+            model = cls(config["grasp_encoder"]["value"])
+            weights_file = wandb.restore(weights_fn, run_path, root=tmpdir)
+            with open(weights_file.name, "rb") as f:
+                state_dict = torch.load(f, map_location=map_location)
+        model.load_state_dict(state_dict)
+        return model
+
     def create_rgb_processor(self):
         return self.feature_extractor.create_processor()
 
@@ -207,12 +227,12 @@ if __name__ == "__main__":
     else:
         device = "cpu"
     import yaml
-    with open("config/params.yaml", "r") as f:
+    with open("config/regression.yaml", "r") as f:
         config = yaml.safe_load(f)
     model = GraspEncoder(config["grasp_encoder"]).to(device)
     model.eval()
     print(f"Total number of parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Total number of params in transformer: {sum(p.numel() for p in model.transformer_layer.parameters()):,}")
+    print(f"Total number of params in transformer: {sum(p.numel() for p in model.trf_encoder.parameters()):,}")
     batch_size = 12
     with torch.autocast(device_type=device, dtype=torch.float16):
         rgbs = torch.rand(batch_size, 3, 512, 512).to(device)
