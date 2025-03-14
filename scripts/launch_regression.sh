@@ -17,5 +17,6 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --priority normal \
     --cluster ai2/ceres-cirrascale \
     --cluster ai2/prior-elanding \
+    --shared-memory 16GiB \
     -- \
     python src/train_regression.py
