@@ -46,6 +46,7 @@ def test(model: nn.Module, test_loader: DataLoader):
             gt_matrix[i, annotation_id_idxs[annot_id]] = 1.0
         classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
         classification_losses.append(classification_loss.item())
+    model.train()
     return {
         "loss": np.mean(losses),
         "classification_loss": np.mean(classification_losses),
@@ -98,6 +99,7 @@ def main(config: DictConfig):
 
     model = torch.nn.DataParallel(GraspEncoder(config["grasp_encoder"]))
     model.cuda()
+    model.train()
     print("Compiling model...")
     torch.compile(model)
     print("Done!")
@@ -117,50 +119,53 @@ def main(config: DictConfig):
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
     lr_scheduler = WarmupCosineLR(
         optimizer,
-        config["train"]["lr_schedule"]["warmup_epochs"],
-        config["train"]["epochs"],
+        config["train"]["lr_schedule"]["warmup_steps"],
+        config["train"]["steps"],
         config["train"]["lr_schedule"]["final_factor"]
     )
 
     checkpointer = Checkpointer(ckpt_dir, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler)
-    start_epoch = checkpointer.load()
+    start_step = checkpointer.load()
 
-    for epoch in tqdm(range(start_epoch, config["train"]["epochs"]), total=config["train"]["epochs"], initial=start_epoch):
-        losses = []
-        infer_times = []
-        variances = []
-        model.train()
-        for batch in tqdm(train_loader, desc="Batch", leave=False):
-            optimizer.zero_grad()
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
-                text_embedding = batch["text_embedding"].cuda()
-                infer_start = time.perf_counter()
-                grasp_features = model(rgb, xyz, grasp_pose)
-                infer_end = time.perf_counter()
-                infer_times.append(infer_end - infer_start)
-                loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1).mean()
-            with torch.no_grad():
-                variances.append(torch.var(grasp_features, dim=0).mean().item())
-            losses.append(loss.item())
-            loss.backward()
-            optimizer.step()
-        lr_scheduler.step()
-        info = {
-            "loss": np.mean(losses),
-            "lr": np.mean(lr_scheduler.get_last_lr()),
-            "variance": np.mean(variances),
-            "infer_time": np.mean(infer_times),
-        }
+    step = start_step
+    with tqdm(total=config["train"]["steps"], initial=start_step, desc="Training") as pbar:
+        while step < config["train"]["steps"]:
+            for batch in train_loader:
+                optimizer.zero_grad()
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
+                    text_embedding = batch["text_embedding"].cuda()
+                    infer_start = time.perf_counter()
+                    grasp_features = model(rgb, xyz, grasp_pose)
+                    infer_end = time.perf_counter()
+                    infer_time = infer_end - infer_start
+                    loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1).mean()
+                    variance = torch.var(grasp_features, dim=0).mean().item()
+                loss.backward()
+                optimizer.step()
+                lr_scheduler.step()
 
-        if test_loader is not None and config["train"]["test"]["period"] and epoch % config["train"]["test"]["period"] == 0:
-            test_results = test(model, test_loader)
-            info["test"] = test_results
+                info = {
+                    "epoch": step // len(train_loader),
+                    "loss": loss.item(),
+                    "lr": np.mean(lr_scheduler.get_last_lr()),
+                    "variance": variance,
+                    "infer_time": infer_time,
+                }
 
-        run.log(nested_dict_to_flat_dict(info))
+                if test_loader is not None and config["train"]["test"]["period"] and step % config["train"]["test"]["period"] == 0:
+                    test_results = test(model, test_loader)
+                    info["test"] = test_results
 
-        if config["train"]["save_period"] and epoch % config["train"]["save_period"] == 0:
-            checkpointer.save(epoch)
+                run.log(nested_dict_to_flat_dict(info))
+
+                if config["train"]["save_period"] and step % config["train"]["save_period"] == 0:
+                    checkpointer.save(step)
+
+                step += 1
+                pbar.update(1)
+                if step >= config["train"]["steps"]:
+                    break
 
     save_path = os.path.join(out_dir, "grasp_encoder.pt")
     torch.save(model.state_dict(), save_path)

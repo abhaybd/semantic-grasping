@@ -2,7 +2,6 @@ import os
 from typing import Any, Protocol
 import math
 from contextlib import nullcontext
-import tempfile
 import yaml
 
 from transformers import AutoModel, AutoProcessor
@@ -11,7 +10,6 @@ from torch import nn
 from torch import optim
 import torch.nn.functional as F
 
-from nv_embed_v2 import NVEmbedModel
 class StateDictProtocol(Protocol):
     def state_dict(self) -> dict[str, Any]:
         ...
@@ -25,29 +23,29 @@ class Checkpointer:
         self.ckpt_dir = ckpt_dir
         self.modules = modules
 
-    def save(self, epoch: int):
+    def save(self, step: int):
         ckpt = {
-            "epoch": epoch,
+            "step": step,
             **{k: v.state_dict() for k, v in self.modules.items()}
         }
-        torch.save(ckpt, os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth"))
+        torch.save(ckpt, os.path.join(self.ckpt_dir, f"ckpt_{step}.pth"))
 
-    def load(self, epoch: int | None = None) -> int:
-        if epoch is None:
-            epochs = []
+    def load(self, step: int | None = None) -> int:
+        if step is None:
+            steps = []
             for f in os.listdir(self.ckpt_dir):
                 if f.startswith("ckpt_") and f.endswith(".pth"):
                     e = int(f[:-len(".pth")].split("_")[-1])
-                    epochs.append(e)
-            if len(epochs) == 0:
+                    steps.append(e)
+            if len(steps) == 0:
                 return 0
-            epoch = max(epochs)
+            step = max(steps)
         else:
-            ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{epoch}.pth")
+            ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{step}.pth")
         ckpt = torch.load(ckpt_path)
         for k, v in self.modules.items():
             v.load_state_dict(ckpt[k])
-        return epoch
+        return step
 
 class WarmupCosineLR(torch.optim.lr_scheduler.LambdaLR):
     def __init__(self, optimizer: optim.Optimizer, warmup_steps: int, total_steps: int, final_factor: float = 0.1):

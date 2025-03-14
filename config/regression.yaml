@@ -16,7 +16,7 @@ grasp_encoder:
 
 train:
   dataloader:
-    batch_size: 96
+    batch_size: 128
     num_workers: 4
   dataset:
     augment: true
@@ -29,15 +29,15 @@ train:
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
   optimizer:
-    lr: 0.0002
+    lr: 0.0001
     # weight_decay: 0.0
   test:
     frac: 0.2
-    period: 2
+    period: 500
     batch_size: 128
   lr_schedule:
-    warmup_epochs: 20
-    final_factor: 0.1
-  epochs: 200
-  save_period: 10
+    warmup_steps: 15000
+    final_factor: 0.2
+  steps: 50000
+  save_period: 2500
   seed: 42
