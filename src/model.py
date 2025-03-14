@@ -173,18 +173,21 @@ class GraspEncoder(nn.Module):
     def from_wandb(cls, run_id: str, ckpt: int | None = None, map_location="cpu"):
         assert ckpt is None, "Checkpoint loading not supported yet"
         import wandb
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_fn = "config.yaml"
-            weights_fn = "grasp_encoder.pt"
-            run_path = f"prior-ai2/semantic-grasping/{run_id}"
-            cfg_file = wandb.restore(config_fn, run_path, root=tmpdir)
-            with open(cfg_file.name, "r") as f:
-                config = yaml.safe_load(f)
-            model = cls(config["grasp_encoder"]["value"])
-            weights_file = wandb.restore(weights_fn, run_path, root=tmpdir)
-            with open(weights_file.name, "rb") as f:
-                state_dict = torch.load(f, map_location=map_location)
-        model.load_state_dict(state_dict)
+        dl_path = f"/tmp/semantic-grasping/{run_id}"
+        os.makedirs(dl_path, exist_ok=True)
+        run_path = f"prior-ai2/semantic-grasping/{run_id}"
+
+        cfg_file = wandb.restore("config.yaml", run_path, root=dl_path)
+        with open(cfg_file.name, "r") as f:
+            config = yaml.safe_load(f)
+
+        weights_file = wandb.restore("grasp_encoder.pt", run_path, root=dl_path)
+        with open(weights_file.name, "rb") as f:
+            state_dict = torch.load(f, map_location=map_location, weights_only=True)
+        new_state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
+
+        model = cls(config["grasp_encoder"]["value"])
+        model.load_state_dict(new_state_dict, strict=False)
         return model
 
     def create_rgb_processor(self):
