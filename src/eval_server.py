@@ -210,7 +210,7 @@ async def predict(scene_id: str, body: dict):
     cam_params = np.array(body["cam_params"])
 
     scene = build_scene(scenes[scene_id], lightings[scene_id])
-    grasps = torch.from_numpy(scene_grasps[scene_id]).float().cuda()
+    grasps = torch.from_numpy(scene_grasps[scene_id]).float().cuda()  # TODO: filter out grasps that aren't visible or too far
     batch_size = 128
 
     print("Rendering")
