@@ -205,6 +205,9 @@ class GraspEncoder(nn.Module):
         xyz_features = self.xyz_encoder(xyz_patch)  # (B, n_patches, hidden_dim)
 
         patch_xyz_features = patch_features + xyz_features
+        # If we're evaluating multiple grasps in a single image, evaluate patch features only once
+        if len(patch_xyz_features) == 1 and len(grasp_poses) > 1:
+            patch_xyz_features = patch_xyz_features.repeat(len(grasp_poses), 1, 1)
 
         grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
         grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)

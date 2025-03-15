@@ -26,15 +26,14 @@ import matplotlib.cm as cm
 
 from semantic_grasping_datagen.annotation import Annotation, Object, GraspLabel
 from semantic_grasping_datagen.datagen.datagen_utils import MeshLibrary, rejection_sample, not_none
-from semantic_grasping_datagen.datagen.datagen import DatagenConfig, noncolliding_annotations, sample_scene, generate_lighting
+from semantic_grasping_datagen.datagen.datagen import DatagenConfig, noncolliding_annotations, sample_scene, generate_lighting, on_screen_annotations, visible_annotations
 from semantic_grasping_datagen.grasp_desc_encoder import GraspDescriptionEncoder
 
 from model import GraspEncoder
 
 SUPPORT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Table"], {"scale": 0.025})
 OBJECT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Mug", "Pan", "WineGlass"])
-DATAGEN_CFG = DatagenConfig(n_views=0, n_objects_range=(5, 8), n_background_range=(5, 8), min_annots_per_view=20)
-N_GRASPS = 100
+DATAGEN_CFG = DatagenConfig(n_views=0, n_objects_range=(5, 8), n_background_range=(1, 2), min_annots_per_view=20)
 
 scenes: dict[str, ss.Scene] = {}
 lightings: dict[str, list[dict]] = {}
@@ -44,10 +43,6 @@ scene_preds: dict[str, np.ndarray] = {}
 grasp_encoder = GraspEncoder.from_wandb("01JP75M35K9P61ESAQT9YVG3Y6", map_location="cuda").cuda()
 grasp_rgb_processor = grasp_encoder.create_rgb_processor()
 text_encoder = GraspDescriptionEncoder("cuda:1", full_precision=False)
-# grasp_encoder = None
-# grasp_rgb_processor = None
-# text_encoder = None
-
 print("Done loading models")
 
 renderer = pyrender.OffscreenRenderer(640, 480)
@@ -113,18 +108,17 @@ def backproject(cam_K: np.ndarray, depth: np.ndarray):
     xyz = uvd @ np.expand_dims(np.linalg.inv(cam_K).T, axis=0)
     return xyz
 
-def render(scene: pyrender.Scene, cam_pose: np.ndarray, cam_params: np.ndarray):
-    vfov, cx, cy = cam_params
-    fx = fy = cy / np.tan(np.radians(vfov/2))
-    cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+def render(scene: pyrender.Scene, cam_pose: np.ndarray, cam_K: np.ndarray):
     set_camera(scene, cam_K, cam_pose)
     color, depth = renderer.render(scene, flags=pyrender.RenderFlags.SHADOWS_DIRECTIONAL)
     xyz = backproject(cam_K, depth).astype(np.float32)
     return Image.fromarray(color), xyz
 
 def build_scene(ss_scene: ss.Scene, lighting: list[dict]):
+    from copy import deepcopy
     scene = pyrender.Scene.from_trimesh_scene(ss_scene.scene)
     for light in lighting:
+        light = deepcopy(light)
         light_type = getattr(pyrender.light, light["type"])
         light_args = light["args"]
         light_args["color"] = np.array(light["args"]["color"]) / 255.0
@@ -132,10 +126,23 @@ def build_scene(ss_scene: ss.Scene, lighting: list[dict]):
         scene.add_node(light_node)
     return scene
 
+def get_grasp_idxs_in_view(scene: ss.Scene, cam_K: np.ndarray, cam_pose: np.ndarray, grasps: np.ndarray):
+    idxs = np.arange(len(grasps))
+    for mask_fn in [
+        lambda gs: on_screen_annotations(DATAGEN_CFG, cam_K, cam_pose, gs),
+        lambda gs: visible_annotations(scene, cam_pose, gs)
+    ]:
+        mask = mask_fn(grasps[idxs])
+        idxs = idxs[mask]
+        if not np.any(mask):
+            break
+    
+    return idxs
+
 app = FastAPI()
 
-@app.post("/api/generate-scene")
-async def generate_scene():
+@app.post("/api/generate-scene/{n_grasps}")
+async def generate_scene(n_grasps: int):
     scene, _, _, _ = rejection_sample(
         lambda: sample_scene(DATAGEN_CFG, [], OBJECT_LIBRARY, OBJECT_LIBRARY, SUPPORT_LIBRARY),
         not_none,
@@ -146,14 +153,10 @@ async def generate_scene():
     _, grasps = get_grasps_in_scene(scene, OBJECT_LIBRARY)
     scenes[scene_id] = scene
     lightings[scene_id] = lighting
-    if len(grasps) > N_GRASPS:
-        grasp_idxs = np.random.choice(len(grasps), N_GRASPS, replace=False)
+    if len(grasps) > n_grasps:
+        grasp_idxs = np.random.choice(len(grasps), n_grasps, replace=False)
         grasps = grasps[grasp_idxs]
     scene_grasps[scene_id] = grasps
-    np.save("grasps.npy", grasps)
-    scene.export("scene.json")
-    with open("lighting.pkl", "wb") as f:
-        pickle.dump(lighting, f)
     return scene_id
 
 @app.post("/api/clear-pred/{scene_id}")
@@ -169,9 +172,11 @@ async def clear_scene(scene_id: str):
         del scene_grasps[scene_id]
     if scene_id in scene_preds:
         del scene_preds[scene_id]
+    if scene_id in lightings:
+        del lightings[scene_id]
 
-@app.get("/api/get-scene/{scene_id}/{show_pred}", responses={200: {"content": {"model/gltf-binary": {}}}}, response_class=Response)
-async def get_scene(scene_id: str, show_pred: bool):
+@app.get("/api/get-scene/{scene_id}/{key}", responses={200: {"content": {"model/gltf-binary": {}}}}, response_class=Response)
+async def get_scene(scene_id: str, key: str):
     scene_id = re.sub(r"[^a-zA-Z0-9]", "", scene_id)
     try:
         scene = scenes[scene_id].copy()
@@ -180,11 +185,17 @@ async def get_scene(scene_id: str, show_pred: bool):
         return Response(content="Scene not found", media_type="text/plain", status_code=404)
 
     grasps = scene_grasps[scene_id]
-    if scene_id in scene_preds and show_pred:
+    if scene_id in scene_preds:
         similarities = scene_preds[scene_id]
-        print("Similarity range: ", similarities.min(), similarities.max())
-        normalized = (similarities - similarities.min()) / (similarities.max() - similarities.min())
-        colors = (cm.viridis(normalized) * 255).astype(np.uint8)[:, :3]
+        in_view_mask = ~np.isnan(similarities)
+        print("Similarity range: ", np.nanmin(similarities), np.nanmax(similarities))
+        # normalized = (similarities - similarities.min()) / (similarities.max() - similarities.min())
+        # colors = (cm.viridis(normalized) * 255).astype(np.uint8)[:, :3]
+        mask = similarities >= np.percentile(similarities[in_view_mask], 90)
+        colors = np.zeros((len(grasps), 3), dtype=np.uint8)
+        colors[in_view_mask & mask] = np.array([0, 255, 0])
+        colors[in_view_mask & ~mask] = np.array([255, 0, 0])
+        colors[np.nanargmax(similarities)] = np.array([255, 255, 0])
     else:
         colors = [(0, 255, 0)] * len(grasps)
     for grasp, color in zip(grasps, colors):
@@ -207,14 +218,22 @@ async def predict(scene_id: str, body: dict):
     cam_pose = np.eye(4)
     cam_pose[:3, :3] = R.from_quat(cam_quat).as_matrix()
     cam_pose[:3, 3] = cam_pos
-    cam_params = np.array(body["cam_params"])
+    vfov, cx, cy = np.array(body["cam_params"])
+    fx = fy = cy / np.tan(np.radians(vfov/2))
+    cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
 
     scene = build_scene(scenes[scene_id], lightings[scene_id])
-    grasps = torch.from_numpy(scene_grasps[scene_id]).float().cuda()  # TODO: filter out grasps that aren't visible or too far
+
+    grasps = scene_grasps[scene_id]
+    n_grasps = len(grasps)
+    grasp_idxs = get_grasp_idxs_in_view(scenes[scene_id], cam_K, cam_pose, grasps)
+    grasps = grasps[grasp_idxs]
+    grasps = np.linalg.inv(cam_pose)[None] @ grasps
+    grasps = torch.from_numpy(grasps).float().cuda()
     batch_size = 128
 
     print("Rendering")
-    image, xyz = render(scene, cam_pose, cam_params)
+    image, xyz = render(scene, cam_pose, cam_K)
     print("Done rendering")
     image.save("image.png")
     xyz = torch.from_numpy(xyz).float().permute(2, 0, 1).cuda()
@@ -231,10 +250,13 @@ async def predict(scene_id: str, body: dict):
             for i in range(0, len(grasps), batch_size):
                 print(f"Processing batch {i//batch_size + 1} of {math.ceil(len(grasps)/batch_size)}")
                 grasps_batch = grasps[i:i+batch_size]
-                rgb_batch = rgb.unsqueeze(0).repeat(len(grasps_batch), 1, 1, 1)
-                xyz_batch = xyz.unsqueeze(0).repeat(len(grasps_batch), 1, 1, 1)
+                # don't need to repeat rgb and xyz for each grasp
+                rgb_batch = rgb.unsqueeze(0)
+                xyz_batch = xyz.unsqueeze(0)
                 embedding = grasp_encoder(rgb_batch, xyz_batch, grasps_batch)
                 grasp_embeddings.append(embedding.cpu().numpy())
     grasp_embeddings = np.concatenate(grasp_embeddings, axis=0)
     similarities = query_embedding @ grasp_embeddings.T
-    scene_preds[scene_id] = similarities
+    all_similarities = np.full(n_grasps, np.nan)
+    all_similarities[grasp_idxs] = similarities
+    scene_preds[scene_id] = all_similarities
