@@ -110,10 +110,10 @@ def main(config: DictConfig):
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
         train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
-        train_loader = DataLoader(train_dataset, shuffle=True, persistent_workers=True, **config["train"]["dataloader"])
-        test_loader = DataLoader(test_dataset, shuffle=False, **config["train"]["dataloader"])
+        train_loader = DataLoader(train_dataset, shuffle=True, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
+        test_loader = DataLoader(test_dataset, shuffle=False, pin_memory=True, **config["train"]["dataloader"])
     else:
-        train_loader = DataLoader(dataset, shuffle=True, persistent_workers=True, **config["train"]["dataloader"])
+        train_loader = DataLoader(dataset, shuffle=True, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
         test_loader = None
 
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
