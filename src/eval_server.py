@@ -40,7 +40,7 @@ lightings: dict[str, list[dict]] = {}
 scene_grasps: dict[str, np.ndarray] = {}
 scene_preds: dict[str, np.ndarray] = {}
 
-grasp_encoder = GraspEncoder.from_wandb("01JP75M35K9P61ESAQT9YVG3Y6", map_location="cuda").cuda()
+grasp_encoder = GraspEncoder.from_wandb("01JPE6TG0HZVSCVFFJPJ3HKS6W", 15500, map_location="cuda").cuda()
 grasp_rgb_processor = grasp_encoder.create_rgb_processor()
 text_encoder = GraspDescriptionEncoder("cuda:1", full_precision=False)
 print("Done loading models")
@@ -188,11 +188,11 @@ async def get_scene(scene_id: str, key: str):
     if scene_id in scene_preds:
         similarities = scene_preds[scene_id]
         in_view_mask = ~np.isnan(similarities)
-        print("Similarity range: ", np.nanmin(similarities), np.nanmax(similarities))
-        # normalized = (similarities - similarities.min()) / (similarities.max() - similarities.min())
-        # colors = (cm.viridis(normalized) * 255).astype(np.uint8)[:, :3]
-        mask = similarities >= np.percentile(similarities[in_view_mask], 90)
         colors = np.zeros((len(grasps), 3), dtype=np.uint8)
+        print("Similarity range: ", np.nanmin(similarities), np.nanmax(similarities))
+        # normalized = (similarities - np.nanmin(similarities)) / (np.nanmax(similarities) - np.nanmin(similarities))
+        # colors[in_view_mask] = (cm.viridis(normalized[in_view_mask]) * 255).astype(np.uint8)[:, :3]
+        mask = similarities >= np.percentile(similarities[in_view_mask], 90)
         colors[in_view_mask & mask] = np.array([0, 255, 0])
         colors[in_view_mask & ~mask] = np.array([255, 0, 0])
         colors[np.nanargmax(similarities)] = np.array([255, 255, 0])

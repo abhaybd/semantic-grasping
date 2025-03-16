@@ -1,4 +1,5 @@
 import os
+import io
 from typing import Any, Protocol
 import math
 from contextlib import nullcontext
@@ -9,6 +10,8 @@ import torch
 from torch import nn
 from torch import optim
 import torch.nn.functional as F
+
+from beaker import Beaker
 
 class StateDictProtocol(Protocol):
     def state_dict(self) -> dict[str, Any]:
@@ -189,23 +192,48 @@ class GraspEncoder(nn.Module):
         self.pos_embeddings = PositionalEncoding(hidden_dim)
 
     @classmethod
+    def from_beaker(cls, dataset: str, ckpt: int | None = None, map_location="cpu", config: dict[str, Any] | None = None):
+        beaker = Beaker.from_env()
+
+        if config is None:
+            cfg_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ".hydra/config.yaml"))
+            config = yaml.safe_load(cfg_bytes)
+
+        if ckpt is not None:
+            ckpt_fileinfos = beaker.dataset.ls(dataset, "checkpoints/")
+            ckpt_files = [fi.path for fi in ckpt_fileinfos]
+            ckpt_file = min(ckpt_files, key=lambda x: abs(int(x[:-len(".pth")].split("_")[-1]) - ckpt))
+            ckpt_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ckpt_file))
+            ckpt = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
+            state_dict = ckpt["model"]
+        else:
+            ckpt_bytes = beaker.dataset.get_file(dataset, "grasp_encoder.pt")
+            state_dict = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
+        state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
+        model = cls(config["grasp_encoder"])
+        model.load_state_dict(state_dict, strict=False)
+        return model
+
+    @classmethod
     def from_wandb(cls, run_id: str, ckpt: int | None = None, map_location="cpu"):
-        assert ckpt is None, "Checkpoint loading not supported yet"
         import wandb
+        run_path = f"prior-ai2/semantic-grasping/{run_id}"
+        api = wandb.Api()
+        run = api.run(run_path)
+        config = run.config
+
+        if ckpt is not None:
+            dataset_id = config["env"]["BEAKER_RESULT_DATASET_ID"]
+            return cls.from_beaker(dataset_id, ckpt, map_location=map_location, config=config)
+
         dl_path = f"/tmp/semantic-grasping/{run_id}"
         os.makedirs(dl_path, exist_ok=True)
-        run_path = f"prior-ai2/semantic-grasping/{run_id}"
-
-        cfg_file = wandb.restore("config.yaml", run_path, root=dl_path)
-        with open(cfg_file.name, "r") as f:
-            config = yaml.safe_load(f)
-
         weights_file = wandb.restore("grasp_encoder.pt", run_path, root=dl_path)
         with open(weights_file.name, "rb") as f:
             state_dict = torch.load(f, map_location=map_location, weights_only=True)
         new_state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
 
-        model = cls(config["grasp_encoder"]["value"])
+        model = cls(config["grasp_encoder"])
         model.load_state_dict(new_state_dict, strict=False)
         return model
 
