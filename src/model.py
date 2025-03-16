@@ -123,6 +123,25 @@ def create_mlp(input_dim: int, output_dim: int, layers: list[int], batch_norm: b
     return ret
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 4096):
+        super().__init__()
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[bach_size, seq_len, embedding_dim]``
+        """
+        x = x + self.pe[:, :x.size(1)]
+        return x
+
 class GraspEncoder(nn.Module):
     def __init__(self, config: dict[str, Any]):
         super().__init__()
@@ -152,7 +171,7 @@ class GraspEncoder(nn.Module):
 
         # encoder for grasp pose
         self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers, batch_norm=False)
-        self.grasp_pos_encoding = nn.Parameter(torch.randn(1, hidden_dim))
+        # self.grasp_pos_encoding = nn.Parameter(torch.randn(1, hidden_dim))
 
         self.query_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
         self.trf_encoder = nn.TransformerEncoder(
@@ -166,6 +185,8 @@ class GraspEncoder(nn.Module):
             num_layers=self.config["transformer"]["num_encoder_layers"]
         )
         self.final_fc = create_mlp(hidden_dim, embed_dim, final_fc_layers)
+
+        self.pos_embeddings = PositionalEncoding(hidden_dim)
 
     @classmethod
     def from_wandb(cls, run_id: str, ckpt: int | None = None, map_location="cpu"):
@@ -211,14 +232,15 @@ class GraspEncoder(nn.Module):
 
         grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
         grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)
-        grasp_features = grasp_features + self.grasp_pos_encoding
+        # grasp_features = grasp_features + self.grasp_pos_encoding
         grasp_features = grasp_features.unsqueeze(1)  # (B, 1, hidden_dim)
 
         input_sequence = torch.cat([patch_xyz_features, grasp_features], dim=1)  # (B, n_patches + 1, hidden_dim)
 
         query_tokens = self.query_token.repeat(input_sequence.shape[0], 1, 1)  # (B, 1, hidden_dim)
         sequence = torch.cat([query_tokens, input_sequence], dim=1)
-        output = self.trf_encoder(sequence)
+        embedded_sequence = self.pos_embeddings(sequence)
+        output = self.trf_encoder(embedded_sequence)
         output = output[:, 0, :]
         output = self.final_fc(output)
         return output / torch.linalg.norm(output, dim=-1, keepdim=True)
