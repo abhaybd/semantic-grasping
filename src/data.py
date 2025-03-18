@@ -4,7 +4,6 @@ import os
 
 import numpy as np
 import torch
-from torch.nn import functional as nnF
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.v2 as T
 from torchvision.transforms.v2 import functional as trfF
@@ -128,7 +127,7 @@ class GraspDescriptionRegressionDataset(Dataset):
         rgb = self.img_processor(rgb)
 
         if rgb.shape[-2:] != xyz.shape[-2:]:
-            xyz = nnF.interpolate(xyz.unsqueeze(0), size=rgb.shape[-2:], mode='bilinear').squeeze(0)
+            xyz = trfF.resize(xyz, rgb.shape[-2:])
 
         return {
             'annotation_id': row['annotation_id'],

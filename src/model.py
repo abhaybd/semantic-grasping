@@ -11,6 +11,7 @@ from torch import nn
 from torch import optim
 import torch.nn.functional as F
 from torchvision.models import VisionTransformer
+from torchvision.transforms.v2.functional import resize
 
 from beaker import Beaker
 
@@ -73,6 +74,7 @@ class SiglipPatchFeatureExtractor(nn.Module):
     def create_processor(self):
         processor = AutoProcessor.from_pretrained(self.checkpoint)
         def fn(rgb):
+            rgb = resize(rgb, (self.image_size, self.image_size))
             inputs = processor(images=rgb, return_tensors="pt")
             return inputs["pixel_values"][0]
         return fn
