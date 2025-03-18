@@ -6,10 +6,15 @@ grasp_encoder:
   embed_dim: 4096
   hidden_dim: 512
   feature_layers: [2048, 2048]
-  xyz_layers: [256, 256]
+  xyz_feature_layers: [1024, 1024]
   grasp_layers: [256, 256]
   final_fc_layers: [2048, 2048]
   train_vision_model: false
+  xyz_encoder:
+    num_layers: 4
+    num_heads: 4
+    hidden_dim: 768
+    mlp_dim: 3072
   transformer:
     nhead: 4
     num_encoder_layers: 3
@@ -35,7 +40,7 @@ train:
     frac: 0.2
     period: 500
   lr_schedule:
-    warmup_steps: 15000
+    warmup_steps: 10000
     final_factor: 0.2
   steps: 50000
   save_period: 2500

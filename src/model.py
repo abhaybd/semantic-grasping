@@ -10,6 +10,7 @@ import torch
 from torch import nn
 from torch import optim
 import torch.nn.functional as F
+from torchvision.models import VisionTransformer
 
 from beaker import Beaker
 
@@ -81,6 +82,10 @@ class SiglipPatchFeatureExtractor(nn.Module):
         return self.siglip.config.hidden_size
 
     @property
+    def image_size(self):
+        return self.siglip.config.image_size
+
+    @property
     def patch_size(self):
         return self.siglip.config.patch_size
 
@@ -125,6 +130,27 @@ def create_mlp(input_dim: int, output_dim: int, layers: list[int], batch_norm: b
     ret.append(nn.Linear(layers[-1], output_dim))
     return ret
 
+class ViTEncoder(torch.nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.model = VisionTransformer(**kwargs)
+
+    def forward(self, x):
+        """
+        Expects (B, 3, H, W) input, returns (B, n_patches, hidden_dim) features
+        """
+        x = self.model._process_input(x)
+        # Expand the class token to the full batch
+        batch_class_token = self.model.class_token.expand(len(x), -1, -1)
+        x = torch.cat([batch_class_token, x], dim=1)
+        x = self.model.encoder(x)
+        x = x[:, 1:]  # Remove the class token
+        return x
+
+    @property
+    def embed_dim(self):
+        return self.model.hidden_dim
+
 
 class GraspEncoder(nn.Module):
     def __init__(self, config: dict[str, Any]):
@@ -134,24 +160,18 @@ class GraspEncoder(nn.Module):
         hidden_dim: int = config["hidden_dim"]
         embed_dim: int = config["embed_dim"]
         feature_layers: list[int] = config["feature_layers"]
-        xyz_layers: list[int] = config["xyz_layers"]
+        xyz_feature_layers: list[int] = config["xyz_feature_layers"]
         grasp_layers: list[int] = config["grasp_layers"]
         final_fc_layers: list[int] = config["final_fc_layers"]
         self.feature_extractor = SiglipPatchFeatureExtractor()
         self.feature_encoder = create_mlp(self.feature_extractor.embed_dim, hidden_dim, feature_layers)
 
-        patch_size = self.feature_extractor.patch_size
-        # kernel for averaging xyz over patches
-        self.register_buffer(
-            "xyz_kernel",
-            torch.ones(3, 3, patch_size, patch_size) / patch_size**2,
-            persistent=False,
+        self.xyz_feature_extractor = ViTEncoder(
+            image_size=self.feature_extractor.image_size,
+            patch_size=self.feature_extractor.patch_size,
+            **config["xyz_encoder"]
         )
-        # zero out channels of the kernel so that averaging is only within a dimension
-        self.xyz_kernel[0, [1, 2]] = 0
-        self.xyz_kernel[1, [0, 2]] = 0
-        self.xyz_kernel[2, [0, 1]] = 0
-        self.xyz_encoder = create_mlp(3, hidden_dim, xyz_layers, batch_norm=False)
+        self.xyz_feature_encoder = create_mlp(self.xyz_feature_extractor.embed_dim, hidden_dim, xyz_feature_layers)
 
         # encoder for grasp pose
         self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers, batch_norm=False)
@@ -228,9 +248,8 @@ class GraspEncoder(nn.Module):
             patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
         patch_features = self.feature_encoder(patch_features)  # (B, n_patches, hidden_dim)
 
-        xyz_patch = F.conv2d(xyzs, self.xyz_kernel, stride=self.feature_extractor.patch_size, padding=0)
-        xyz_patch = xyz_patch.reshape(len(xyz_patch), 3, -1).transpose(1, 2)  # (B, n_patches, 3)
-        xyz_features = self.xyz_encoder(xyz_patch)  # (B, n_patches, hidden_dim)
+        xyz_features = self.xyz_feature_extractor(xyzs)  # (B, n_patches, xyz_feature_dim)
+        xyz_features = self.xyz_feature_encoder(xyz_features)  # (B, n_patches, hidden_dim)
 
         patch_xyz_features = patch_features + xyz_features
         # If we're evaluating multiple grasps in a single image, evaluate patch features only once
