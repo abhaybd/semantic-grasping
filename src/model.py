@@ -1,11 +1,11 @@
 import os
 import io
-from typing import Any, Protocol
+from typing import Any, Protocol, Optional
 import math
 from contextlib import nullcontext
 import yaml
 
-from transformers import AutoModel, AutoProcessor
+from transformers import AutoModel, AutoProcessor, T5Tokenizer, T5EncoderModel
 import torch
 from torch import nn
 from torch import optim
@@ -64,12 +64,15 @@ class WarmupCosineLR(torch.optim.lr_scheduler.LambdaLR):
         super().__init__(optimizer, lr_lambda)
 
 class SiglipPatchFeatureExtractor(nn.Module):
-    def __init__(self, checkpoint="google/siglip2-large-patch16-512"):
+    def __init__(self, checkpoint="google/siglip2-large-patch16-512", frozen=True):
         super().__init__()
         self.checkpoint = checkpoint
         siglip = AutoModel.from_pretrained(checkpoint)
         self.siglip = siglip.vision_model
         del siglip
+        if frozen:
+            for param in self.siglip.parameters():
+                param.requires_grad = False
 
     def create_processor(self):
         processor = AutoProcessor.from_pretrained(self.checkpoint)
@@ -103,6 +106,34 @@ class SiglipPatchFeatureExtractor(nn.Module):
         outputs = self.siglip(pixel_values=rgbs)
         return outputs.pooler_output
 
+
+class T5TextEncoder(nn.Module):
+    def __init__(self, checkpoint="google-t5/t5-base", max_length=128, frozen=True):
+        super().__init__()
+        self.tokenizer = T5Tokenizer.from_pretrained(checkpoint, legacy=True)
+        self.encoder = T5EncoderModel.from_pretrained(checkpoint)
+        self.max_length = max_length
+        if frozen:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+
+    @property
+    def embed_dim(self):
+        return self.encoder.config.d_model
+
+    def create_processor(self):
+        def fn(texts: list[str]) -> tuple[torch.LongTensor, torch.FloatTensor]:
+            inputs = self.tokenizer(texts, return_tensors="pt", padding="max_length", max_length=self.max_length)
+            return inputs["input_ids"], inputs["attention_mask"]
+        return fn
+
+    def forward(self, input_ids: torch.LongTensor, attention_mask: torch.FloatTensor | None=None):
+        """
+        Expects (B, max_length) input_ids, (B, max_length) attention_mask
+        Returns (B, max_length, embed_dim) features
+        """
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        return outputs.last_hidden_state
 
 class CustomBatchNorm(nn.Module):
     def __init__(self, num_features: int, **kwargs):
@@ -154,11 +185,61 @@ class ViTEncoder(torch.nn.Module):
         return self.model.hidden_dim
 
 
-class GraspEncoder(nn.Module):
+class Model(nn.Module):
     def __init__(self, config: dict[str, Any]):
         super().__init__()
-
         self.config = config
+
+    @classmethod
+    def from_beaker(cls, dataset: str, ckpt: int | None = None, map_location="cpu", config: dict[str, Any] | None = None):
+        beaker = Beaker.from_env()
+
+        if config is None:
+            cfg_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ".hydra/config.yaml"))
+            config = yaml.safe_load(cfg_bytes)
+
+        if ckpt is not None:
+            ckpt_fileinfos = beaker.dataset.ls(dataset, "checkpoints/")
+            ckpt_files = [fi.path for fi in ckpt_fileinfos]
+            ckpt_file = min(ckpt_files, key=lambda x: abs(int(x[:-len(".pth")].split("_")[-1]) - ckpt))
+            ckpt_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ckpt_file))
+            ckpt = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
+            state_dict = ckpt["model"]
+        else:
+            ckpt_bytes = beaker.dataset.get_file(dataset, "model.pt")
+            state_dict = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
+        state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
+        model = cls(config["model"])
+        model.load_state_dict(state_dict, strict=False)
+        return model
+
+    @classmethod
+    def from_wandb(cls, run_id: str, ckpt: int | None = None, map_location="cpu"):
+        import wandb
+        run_path = f"prior-ai2/semantic-grasping/{run_id}"
+        api = wandb.Api()
+        run = api.run(run_path)
+        config = run.config
+
+        if ckpt is not None:
+            dataset_id = config["env"]["BEAKER_RESULT_DATASET_ID"]
+            return cls.from_beaker(dataset_id, ckpt, map_location=map_location, config=config)
+
+        dl_path = f"/tmp/semantic-grasping/{run_id}"
+        os.makedirs(dl_path, exist_ok=True)
+        weights_file = wandb.restore("model.pt", run_path, root=dl_path)
+        with open(weights_file.name, "rb") as f:
+            state_dict = torch.load(f, map_location=map_location, weights_only=True)
+        new_state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
+
+        model = cls(config["model"])
+        model.load_state_dict(new_state_dict, strict=False)
+        return model
+
+class GraspEncoder(Model):
+    def __init__(self, config: dict[str, Any]):
+        super().__init__(config)
+
         hidden_dim: int = config["hidden_dim"]
         embed_dim: int = config["embed_dim"]
         feature_layers: list[int] = config["feature_layers"]
@@ -191,52 +272,6 @@ class GraspEncoder(nn.Module):
             num_layers=self.config["transformer"]["num_encoder_layers"]
         )
         self.final_fc = create_mlp(hidden_dim, embed_dim, final_fc_layers)
-
-    @classmethod
-    def from_beaker(cls, dataset: str, ckpt: int | None = None, map_location="cpu", config: dict[str, Any] | None = None):
-        beaker = Beaker.from_env()
-
-        if config is None:
-            cfg_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ".hydra/config.yaml"))
-            config = yaml.safe_load(cfg_bytes)
-
-        if ckpt is not None:
-            ckpt_fileinfos = beaker.dataset.ls(dataset, "checkpoints/")
-            ckpt_files = [fi.path for fi in ckpt_fileinfos]
-            ckpt_file = min(ckpt_files, key=lambda x: abs(int(x[:-len(".pth")].split("_")[-1]) - ckpt))
-            ckpt_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ckpt_file))
-            ckpt = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
-            state_dict = ckpt["model"]
-        else:
-            ckpt_bytes = beaker.dataset.get_file(dataset, "grasp_encoder.pt")
-            state_dict = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
-        state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
-        model = cls(config["grasp_encoder"])
-        model.load_state_dict(state_dict, strict=False)
-        return model
-
-    @classmethod
-    def from_wandb(cls, run_id: str, ckpt: int | None = None, map_location="cpu"):
-        import wandb
-        run_path = f"prior-ai2/semantic-grasping/{run_id}"
-        api = wandb.Api()
-        run = api.run(run_path)
-        config = run.config
-
-        if ckpt is not None:
-            dataset_id = config["env"]["BEAKER_RESULT_DATASET_ID"]
-            return cls.from_beaker(dataset_id, ckpt, map_location=map_location, config=config)
-
-        dl_path = f"/tmp/semantic-grasping/{run_id}"
-        os.makedirs(dl_path, exist_ok=True)
-        weights_file = wandb.restore("grasp_encoder.pt", run_path, root=dl_path)
-        with open(weights_file.name, "rb") as f:
-            state_dict = torch.load(f, map_location=map_location, weights_only=True)
-        new_state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
-
-        model = cls(config["grasp_encoder"])
-        model.load_state_dict(new_state_dict, strict=False)
-        return model
 
     def create_rgb_processor(self):
         return self.feature_extractor.create_processor()
@@ -272,7 +307,97 @@ class GraspEncoder(nn.Module):
         output = self.final_fc(output)
         return output / torch.linalg.norm(output, dim=-1, keepdim=True)
 
-if __name__ == "__main__":
+class GraspClassifier(Model):
+    def __init__(self, config: dict[str, Any]):
+        super().__init__(config)
+
+        hidden_dim: int = config["hidden_dim"]
+        feature_layers: list[int] = config["feature_layers"]
+        xyz_feature_layers: list[int] = config["xyz_feature_layers"]
+        grasp_layers: list[int] = config["grasp_layers"]
+        final_fc_layers: list[int] = config["final_fc_layers"]
+        text_feature_layers: list[int] = config["text_feature_layers"]
+
+        self.rgb_feature_extractor = SiglipPatchFeatureExtractor(**config["rgb_encoder"])
+        self.rgb_feature_encoder = create_mlp(self.rgb_feature_extractor.embed_dim, hidden_dim, feature_layers)
+
+        self.xyz_feature_extractor = ViTEncoder(
+            image_size=self.rgb_feature_extractor.image_size,
+            patch_size=self.rgb_feature_extractor.patch_size,
+            **config["xyz_encoder"]
+        )
+        self.xyz_feature_encoder = create_mlp(self.xyz_feature_extractor.embed_dim, hidden_dim, xyz_feature_layers)
+        self.image_patch_modality_encoding = nn.Parameter(torch.randn(1, 1, hidden_dim))
+
+        # encoder for grasp pose
+        self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers, batch_norm=False)
+        self.grasp_modality_encoding = nn.Parameter(torch.randn(1, hidden_dim))
+
+        self.text_feature_extractor = T5TextEncoder(**config["text_encoder"])
+        self.text_feature_encoder = create_mlp(self.text_feature_extractor.embed_dim, hidden_dim, text_feature_layers)
+        self.text_modality_encoding = nn.Parameter(torch.randn(1, hidden_dim))
+
+        self.query_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
+        self.trf_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=self.config["transformer"]["nhead"],
+                dim_feedforward=int(hidden_dim * 4),
+                dropout=0.0,
+                batch_first=True
+            ),
+            num_layers=self.config["transformer"]["num_encoder_layers"]
+        )
+        self.final_fc = create_mlp(hidden_dim, 1, final_fc_layers)
+
+    def create_rgb_processor(self):
+        return self.rgb_feature_extractor.create_processor()
+
+    def create_text_processor(self):
+        return self.text_feature_extractor.create_processor()
+
+    def forward(self,
+        rgbs: torch.Tensor,
+        xyzs: torch.Tensor,
+        grasp_poses: torch.Tensor,
+        text_input_ids: torch.LongTensor,
+        text_attention_mask: Optional[torch.FloatTensor] = None
+    ):
+        """
+        Expects (B, 3, H, W) rgbs, (B, 3, H, W) xyzs, (B, 4, 4) grasp_poses, (B, max_length) text_input_ids, (B, max_length) text_attention_mask
+        Returns (B, 1) grasp classification logits
+        """
+        patch_features = self.rgb_feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
+        patch_features = self.rgb_feature_encoder(patch_features)  # (B, n_patches, hidden_dim)
+
+        xyz_features = self.xyz_feature_extractor(xyzs)  # (B, n_patches, xyz_feature_dim)
+        xyz_features = self.xyz_feature_encoder(xyz_features)  # (B, n_patches, hidden_dim)
+
+        patch_xyz_features = patch_features + xyz_features + self.image_patch_modality_encoding
+        # If we're evaluating multiple grasps in a single image, evaluate patch features only once
+        if len(patch_xyz_features) == 1 and len(grasp_poses) > 1:
+            patch_xyz_features = patch_xyz_features.expand(len(grasp_poses), -1, -1)
+
+        grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
+        grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)
+        grasp_features = grasp_features + self.grasp_modality_encoding
+        grasp_features = grasp_features.unsqueeze(1)  # (B, 1, hidden_dim)
+
+        text_features = self.text_feature_extractor(text_input_ids, text_attention_mask)  # (B, n_tokens, t5_dim)
+        text_features = self.text_feature_encoder(text_features)  # (B, n_tokens, hidden_dim)
+        text_features = text_features + self.text_modality_encoding
+
+        input_sequence = torch.cat([patch_xyz_features, grasp_features, text_features], dim=1)  # (B, n_patches + 1 + n_tokens, hidden_dim)
+
+        query_tokens = self.query_token.expand(input_sequence.shape[0], -1, -1)  # (B, 1, hidden_dim)
+        sequence = torch.cat([query_tokens, input_sequence], dim=1)
+        output = self.trf_encoder(sequence)
+        output = output[:, 0, :]
+        output = self.final_fc(output)
+        return output
+
+
+def main_regression():
     if torch.cuda.is_available():
         device = "cuda"
     elif torch.backends.mps.is_available():
@@ -282,19 +407,46 @@ if __name__ == "__main__":
     import yaml
     with open("config/regression.yaml", "r") as f:
         config = yaml.safe_load(f)
-    model = GraspEncoder(config["grasp_encoder"]).to(device)
+    model = GraspEncoder(config["model"]).to(device)
     model.eval()
-    print(f"Total number of parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Total number of params in transformer: {sum(p.numel() for p in model.trf_encoder.parameters()):,}")
+    print(model.__class__.__name__)
+    print(f"\tTotal number of parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"\tTotal number of trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     batch_size = 12
     with torch.autocast(device_type=device, dtype=torch.float16):
         rgbs = torch.rand(batch_size, 3, 512, 512).to(device)
         xyzs = torch.rand(batch_size, 3, 512, 512).to(device)
         grasp_poses = torch.randn(batch_size, 4, 4).to(device)
         with torch.no_grad():
-            import time
-            for _ in range(10):
-                start = time.perf_counter()
-                grasp_features = model(rgbs, xyzs, grasp_poses)
-                print(time.perf_counter() - start)
-    print(grasp_features.shape)
+            out = model(rgbs, xyzs, grasp_poses)
+    print(f"\tOutput shape: {out.shape}")
+
+def main_classification():
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+    import yaml
+    with open("config/classification.yaml", "r") as f:
+        config = yaml.safe_load(f)
+    model = GraspClassifier(config["model"]).to(device)
+    model.eval()
+    print(model.__class__.__name__)
+    print(f"\tTotal number of parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"\tTotal number of trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    batch_size = 12
+    with torch.autocast(device_type=device, dtype=torch.float16):
+        rgbs = torch.rand(batch_size, 3, 512, 512).to(device)
+        xyzs = torch.rand(batch_size, 3, 512, 512).to(device)
+        grasp_poses = torch.randn(batch_size, 4, 4).to(device)
+        texts = ["This is a test"] * batch_size
+        text_input_ids, text_attention_mask = [x.to(device) for x in model.create_text_processor()(texts)]
+        with torch.no_grad():
+            out = model(rgbs, xyzs, grasp_poses, text_input_ids, text_attention_mask)
+    print(f"\tOutput shape: {out.shape}")
+
+if __name__ == "__main__":
+    main_regression()
+    main_classification()

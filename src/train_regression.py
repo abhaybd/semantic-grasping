@@ -97,7 +97,7 @@ def main(config: DictConfig):
         resume="allow"
     )
 
-    model = torch.nn.DataParallel(GraspEncoder(config["grasp_encoder"]))
+    model = torch.nn.DataParallel(GraspEncoder(config["model"]))
     model.cuda()
     model.train()
     print("Compiling model...")
@@ -167,7 +167,7 @@ def main(config: DictConfig):
                 if step >= config["train"]["steps"]:
                     break
 
-    save_path = os.path.join(out_dir, "grasp_encoder.pt")
+    save_path = os.path.join(out_dir, "model.pt")
     torch.save(model.state_dict(), save_path)
     wandb.save(save_path, base_path=out_dir)
 

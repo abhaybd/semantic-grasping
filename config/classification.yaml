@@ -3,18 +3,22 @@ hydra:
     dir: /results
 
 model:
-  embed_dim: 4096
   hidden_dim: 512
-  feature_layers: [2048, 2048]
+  feature_layers: [1024, 1024]
   xyz_feature_layers: [1024, 1024]
   grasp_layers: [256, 256]
-  final_fc_layers: [2048, 2048]
-  train_vision_model: false
+  final_fc_layers: [256, 256]
+  text_feature_layers: [1024, 1024]
+  rgb_encoder:
+    frozen: true
   xyz_encoder:
     num_layers: 4
     num_heads: 4
     hidden_dim: 768
     mlp_dim: 3072
+  text_encoder:
+    max_length: 256
+    frozen: true
   transformer:
     nhead: 4
     num_encoder_layers: 3
