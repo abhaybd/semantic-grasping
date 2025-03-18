@@ -124,7 +124,7 @@ def main(config: DictConfig):
         config["train"]["lr_schedule"]["final_factor"]
     )
 
-    checkpointer = Checkpointer(ckpt_dir, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler)
+    checkpointer = Checkpointer(ckpt_dir, model=model.module, optimizer=optimizer, lr_scheduler=lr_scheduler)
     start_step = checkpointer.load()
 
     step = start_step
@@ -168,7 +168,7 @@ def main(config: DictConfig):
                     break
 
     save_path = os.path.join(out_dir, "model.pt")
-    torch.save(model.state_dict(), save_path)
+    torch.save(model.module.state_dict(), save_path)
     wandb.save(save_path, base_path=out_dir)
 
 if __name__ == "__main__":
