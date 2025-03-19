@@ -149,15 +149,18 @@ def main(config: DictConfig):
                     labels = batch["label"].cuda()
                     infer_start = time.perf_counter()
                     pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
+                    nanmask = torch.isnan(pred_logits)
+                    valid_pred_logits = pred_logits[~nanmask]
+                    valid_labels = labels[~nanmask]
                     infer_end = time.perf_counter()
                     infer_time = infer_end - infer_start
-                    loss = F.binary_cross_entropy_with_logits(pred_logits, labels)
-                    variance = torch.var(pred_logits, dim=0).mean().item()
+                    loss = F.binary_cross_entropy_with_logits(valid_pred_logits, valid_labels)
+                    variance = torch.var(valid_pred_logits).item()
                 loss.backward()
                 optimizer.step()
                 lr_scheduler.step()
 
-                metric_values = {k: metric(pred_logits, labels).item() for k, metric in metrics.items()}
+                metric_values = {k: metric(valid_pred_logits, valid_labels).item() for k, metric in metrics.items()}
                 info = {
                     "epoch": step // len(train_loader),
                     "loss": loss.item(),
@@ -180,6 +183,8 @@ def main(config: DictConfig):
                 pbar.update(1)
                 if step >= config["train"]["steps"]:
                     break
+                if torch.isnan(loss):
+                    raise ValueError("Loss is NaN")
 
     save_path = os.path.join(out_dir, "model.pt")
     torch.save(model.module.state_dict(), save_path)
