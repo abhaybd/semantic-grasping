@@ -404,7 +404,9 @@ class GraspClassifier(Model):
         text_features = self.text_feature_extractor(text_input_ids, text_attention_mask)  # (B, n_tokens, t5_dim)
         text_features = self.text_feature_encoder(text_features)  # (B, n_tokens, hidden_dim)
 
-        input_sequence = torch.cat([patch_features, xyz_features, grasp_features, text_features], dim=1)  # (B, n_patches + 1 + n_tokens, hidden_dim)
+        input_sequence = torch.cat([patch_features, text_features], dim=1)  # (B, *, hidden_dim)
+        # TODO: Add back xyz_features and grasp_features after debugging
+        # input_sequence = torch.cat([patch_features, xyz_features, grasp_features, text_features], dim=1)  # (B, *, hidden_dim)
 
         class_tokens = self.class_token.expand(input_sequence.shape[0], -1, -1)  # (B, 1, hidden_dim)
         sequence = torch.cat([class_tokens, input_sequence], dim=1)
