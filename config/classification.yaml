@@ -4,11 +4,11 @@ hydra:
 
 model:
   hidden_dim: 512
-  feature_layers: [1024, 1024]
-  xyz_feature_layers: [1024, 1024]
+  feature_layers: [1024]
+  xyz_feature_layers: []
   grasp_layers: [256, 256]
   final_fc_layers: [256, 256]
-  text_feature_layers: [1024, 1024]
+  text_feature_layers: [1024]
   rgb_encoder:
     frozen: true
   xyz_encoder:
