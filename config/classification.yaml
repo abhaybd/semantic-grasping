@@ -25,10 +25,10 @@ model:
 
 train:
   dataloader:
-    batch_size: 128
-    num_workers: 6
+    batch_size: 256
+    num_workers: 12
   dataset:
-    augment: true
+    augment: false
     augmentation_params:
       color_jitter_prob: 0.8
       gray_scale_prob: 0.1
@@ -38,12 +38,12 @@ train:
     csv_path: /dataset/dataset.csv
   optimizer:
     lr: 0.0001
-    # weight_decay: 0.0
+    weight_decay: 0.0
   test:
-    frac: 0.2
-    period: 500
+    frac: 0
+    period: 0
   lr_schedule:
-    warmup_steps: 10000
+    warmup_steps: 5000
     final_factor: 0.2
   steps: 50000
   save_period: 2500

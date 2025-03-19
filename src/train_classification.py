@@ -114,7 +114,13 @@ def main(config: DictConfig):
         train_loader = DataLoader(dataset, sampler=sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
         test_loader = None
 
-    optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
+    # TODO: get this into the config
+    groups = [
+        {**config["train"]["optimizer"], "params": [p for n, p in model.named_parameters() if "trf" not in n and "xyz_feature_extractor" not in n]},
+        {"lr": 0.00001, "params": [p for n, p in model.named_parameters() if "trf" in n or "xyz_feature_extractor" in n]},
+    ]
+
+    optimizer = optim.AdamW(groups)
     lr_scheduler = WarmupCosineLR(
         optimizer,
         config["train"]["lr_schedule"]["warmup_steps"],
