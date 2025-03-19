@@ -1,4 +1,3 @@
-from collections import defaultdict
 from typing import Callable, Optional
 import os
 
@@ -174,7 +173,7 @@ class GraspDescriptionClassificationDataset(Dataset):
         if rgb.shape[-2:] != xyz.shape[-2:]:
             xyz = trfF.resize(xyz, rgb.shape[-2:])
 
-        label = torch.tensor(1 if self.obs_to_annot_id[obs_idx] == annot_idx else 0)
+        label = torch.tensor([1 if self.obs_to_annot_id[obs_idx] == annot_idx else 0]).float()
 
         return {
             "rgb": rgb,

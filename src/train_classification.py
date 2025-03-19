@@ -24,7 +24,6 @@ from data import GraspDescriptionClassificationDataset, GraspDescriptionClassifi
 def test(model: nn.Module, test_loader: DataLoader):
     model.eval()
     losses = []
-    classification_losses = []
     variances = []
     metrics = {
         "f1": BinaryF1Score(),
@@ -102,14 +101,16 @@ def main(config: DictConfig):
     img_processor = model.module.create_rgb_processor()
     text_processor = model.module.create_text_processor()
     dataset = GraspDescriptionClassificationDataset(img_processor=img_processor, text_processor=text_processor, **config["train"]["dataset"])
-    sampler = GraspDescriptionClassificationSampler(dataset)
     test_frac = config["train"]["test"]["frac"]
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
+        # TODO: this doesn't work, since random splitting breaks the sampler. Maybe just re-implement the splitting?
         train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
-        train_loader = DataLoader(train_dataset, sampler=sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
-        test_loader = DataLoader(test_dataset, sampler=sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
+        train_sampler = GraspDescriptionClassificationSampler(train_dataset)
+        train_loader = DataLoader(train_dataset, sampler=train_sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
+        test_loader = DataLoader(test_dataset, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
     else:
+        sampler = GraspDescriptionClassificationSampler(dataset)
         train_loader = DataLoader(dataset, sampler=sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
         test_loader = None
 
@@ -128,6 +129,8 @@ def main(config: DictConfig):
         "f1": BinaryF1Score(),
         "accuracy": BinaryAccuracy()
     }
+    for metric in metrics.values():
+        metric.cuda()
 
     step = start_step
     with tqdm(total=config["train"]["steps"], initial=start_step, desc="Training") as pbar:
@@ -148,7 +151,7 @@ def main(config: DictConfig):
                 optimizer.step()
                 lr_scheduler.step()
 
-                metric_values = {k: metric(pred_logits.flatten(), labels).item() for k, metric in metrics.items()}
+                metric_values = {k: metric(pred_logits, labels).item() for k, metric in metrics.items()}
                 info = {
                     "epoch": step // len(train_loader),
                     "loss": loss.item(),

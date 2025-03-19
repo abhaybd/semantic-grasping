@@ -45,8 +45,7 @@ class Checkpointer:
             if len(steps) == 0:
                 return 0
             step = max(steps)
-        else:
-            ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{step}.pth")
+        ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{step}.pth")
         ckpt = torch.load(ckpt_path)
         for k, v in self.modules.items():
             v.load_state_dict(ckpt[k])
