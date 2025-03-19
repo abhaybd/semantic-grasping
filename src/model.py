@@ -122,9 +122,12 @@ class T5TextEncoder(nn.Module):
         return self.encoder.config.d_model
 
     def create_processor(self):
-        def fn(texts: list[str]) -> tuple[torch.LongTensor, torch.FloatTensor]:
-            inputs = self.tokenizer(texts, return_tensors="pt", padding="max_length", max_length=self.max_length)
-            return inputs["input_ids"], inputs["attention_mask"]
+        def fn(text: str | list[str]) -> tuple[torch.LongTensor, torch.FloatTensor]:
+            inputs = self.tokenizer(text, return_tensors="pt", padding="max_length", max_length=self.max_length)
+            if isinstance(text, str):
+                return inputs["input_ids"][0], inputs["attention_mask"][0]
+            else:
+                return inputs["input_ids"], inputs["attention_mask"]
         return fn
 
     def forward(self, input_ids: torch.LongTensor, attention_mask: torch.FloatTensor | None=None):
