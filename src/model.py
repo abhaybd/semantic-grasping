@@ -270,8 +270,10 @@ class GraspEncoder(Model):
         xyz_feature_layers: list[int] = config["xyz_feature_layers"]
         grasp_layers: list[int] = config["grasp_layers"]
         final_fc_layers: list[int] = config["final_fc_layers"]
-        self.feature_extractor = SiglipPatchFeatureExtractor()
+        self.feature_extractor = SiglipPatchFeatureExtractor(**config["rgb_encoder"])
         self.feature_encoder = create_mlp(self.feature_extractor.embed_dim, hidden_dim, feature_layers)
+
+        self.pos_encoding = PositionalEncoding(hidden_dim)
 
         self.xyz_feature_extractor = ViTEncoder(
             image_size=self.feature_extractor.image_size,
@@ -281,16 +283,17 @@ class GraspEncoder(Model):
         self.xyz_feature_encoder = create_mlp(self.xyz_feature_extractor.embed_dim, hidden_dim, xyz_feature_layers)
 
         # encoder for grasp pose
-        self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers, batch_norm=False)
-        self.grasp_pos_encoding = nn.Parameter(torch.randn(1, hidden_dim))
+        self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers)
 
-        self.query_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
+        self.feature_ln = nn.LayerNorm(hidden_dim)
+        self.class_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
         self.trf_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=hidden_dim,
                 nhead=self.config["transformer"]["nhead"],
                 dim_feedforward=int(hidden_dim * 4),
                 dropout=0.0,
+                norm_first=True,
                 batch_first=True
             ),
             num_layers=self.config["transformer"]["num_encoder_layers"]
@@ -305,27 +308,23 @@ class GraspEncoder(Model):
         Expects (B, 3, H, W) rgbs, (B, 3, H, W) xyzs, (B, 4, 4) grasp_poses
         Returns (B, embed_dim) grasp_features
         """
-        with torch.no_grad() if not self.config["train_vision_model"] else nullcontext():
-            patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
+        patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
         patch_features = self.feature_encoder(patch_features)  # (B, n_patches, hidden_dim)
 
         xyz_features = self.xyz_feature_extractor(xyzs)  # (B, n_patches, xyz_feature_dim)
         xyz_features = self.xyz_feature_encoder(xyz_features)  # (B, n_patches, hidden_dim)
 
-        patch_xyz_features = patch_features + xyz_features
-        # If we're evaluating multiple grasps in a single image, evaluate patch features only once
-        if len(patch_xyz_features) == 1 and len(grasp_poses) > 1:
-            patch_xyz_features = patch_xyz_features.repeat(len(grasp_poses), 1, 1)
-
         grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
         grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)
-        grasp_features = grasp_features + self.grasp_pos_encoding
         grasp_features = grasp_features.unsqueeze(1)  # (B, 1, hidden_dim)
 
-        input_sequence = torch.cat([patch_xyz_features, grasp_features], dim=1)  # (B, n_patches + 1, hidden_dim)
+        input_sequence = torch.cat([patch_features, xyz_features, grasp_features], dim=1)  # (B, *, hidden_dim)
+        input_sequence = self.feature_ln(input_sequence)
 
-        query_tokens = self.query_token.repeat(input_sequence.shape[0], 1, 1)  # (B, 1, hidden_dim)
-        sequence = torch.cat([query_tokens, input_sequence], dim=1)
+        class_tokens = self.class_token.repeat(input_sequence.shape[0], 1, 1)  # (B, 1, hidden_dim)
+        sequence = torch.cat([class_tokens, input_sequence], dim=1)
+        sequence = self.pos_encoding(sequence)
+
         output = self.trf_encoder(sequence)
         output = output[:, 0, :]
         output = self.final_fc(output)

@@ -5,11 +5,12 @@ hydra:
 model:
   embed_dim: 4096
   hidden_dim: 512
-  feature_layers: [2048, 2048]
-  xyz_feature_layers: [1024, 1024]
+  feature_layers: [1024]
+  xyz_feature_layers: [1024]
   grasp_layers: [256, 256]
   final_fc_layers: [2048, 2048]
-  train_vision_model: false
+  rgb_encoder:
+    frozen: true
   xyz_encoder:
     num_layers: 4
     num_heads: 4
@@ -21,8 +22,8 @@ model:
 
 train:
   dataloader:
-    batch_size: 128
-    num_workers: 6
+    batch_size: 256
+    num_workers: 12
   dataset:
     augment: true
     augmentation_params:
@@ -34,13 +35,13 @@ train:
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
   optimizer:
-    lr: 0.0001
-    # weight_decay: 0.0
+    lr: 0.00005
+    weight_decay: 0.0
   test:
     frac: 0.2
     period: 500
   lr_schedule:
-    warmup_steps: 10000
+    warmup_steps: 100
     final_factor: 0.2
   steps: 50000
   save_period: 2500

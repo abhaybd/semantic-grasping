@@ -23,7 +23,6 @@ from data import GraspDescriptionRegressionDataset
 def test(model: nn.Module, test_loader: DataLoader):
     model.eval()
     losses = []
-    classification_losses = []
     variances = []
     for batch in tqdm(test_loader, desc="Test", leave=False):
         rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
@@ -32,24 +31,9 @@ def test(model: nn.Module, test_loader: DataLoader):
         batch_loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1)
         losses.extend(batch_loss.tolist())
         variances.append(torch.var(grasp_features, dim=0).mean().item())
-
-        pairwise_similarity = text_embedding @ grasp_features.T  # (i, j) => i-th text embedding, j-th grasp feature
-
-        annotation_ids = batch["annotation_id"]
-        annotation_id_idxs: dict[str, list[int]] = {}
-        for i, annotation_id in enumerate(annotation_ids):
-            if annotation_id not in annotation_id_idxs:
-                annotation_id_idxs[annotation_id] = []
-            annotation_id_idxs[annotation_id].append(i)
-        gt_matrix = torch.zeros_like(pairwise_similarity)
-        for i, annot_id in enumerate(annotation_ids):
-            gt_matrix[i, annotation_id_idxs[annot_id]] = 1.0
-        classification_loss = F.binary_cross_entropy_with_logits(pairwise_similarity * 100, gt_matrix)
-        classification_losses.append(classification_loss.item())
     model.train()
     return {
         "loss": np.mean(losses),
-        "classification_loss": np.mean(classification_losses),
         "variance": np.mean(variances),
     }
 
@@ -101,7 +85,7 @@ def main(config: DictConfig):
     model.cuda()
     model.train()
     print("Compiling model...")
-    torch.compile(model)
+    # torch.compile(model)
     print("Done!")
 
     img_processor = model.module.create_rgb_processor()
@@ -132,15 +116,15 @@ def main(config: DictConfig):
         while step < config["train"]["steps"]:
             for batch in train_loader:
                 optimizer.zero_grad()
+                rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
+                text_embedding = batch["text_embedding"].cuda()
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
-                    text_embedding = batch["text_embedding"].cuda()
                     infer_start = time.perf_counter()
                     grasp_features = model(rgb, xyz, grasp_pose)
                     infer_end = time.perf_counter()
                     infer_time = infer_end - infer_start
-                    loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1).mean()
-                    variance = torch.var(grasp_features, dim=0).mean().item()
+                loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1).mean()
+                variance = torch.var(grasp_features, dim=0).mean().item()
                 loss.backward()
                 optimizer.step()
                 lr_scheduler.step()
