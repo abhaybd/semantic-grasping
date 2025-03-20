@@ -1,7 +1,5 @@
-import io
 from itertools import compress
 import uuid
-import math
 import os
 import re
 from scipy.spatial.transform import Rotation as R
@@ -16,9 +14,6 @@ import numpy as np
 from fastapi import FastAPI, Response
 import pyrender
 import pyrender.light
-import torch
-import pickle
-from torch.nn import functional as F
 from PIL import Image
 import scene_synthesizer as ss
 from acronym_tools import create_gripper_marker
@@ -27,9 +22,8 @@ import matplotlib.cm as cm
 from semantic_grasping_datagen.annotation import Annotation, Object, GraspLabel
 from semantic_grasping_datagen.datagen.datagen_utils import MeshLibrary, rejection_sample, not_none
 from semantic_grasping_datagen.datagen.datagen import DatagenConfig, noncolliding_annotations, sample_scene, generate_lighting, on_screen_annotations, visible_annotations
-from semantic_grasping_datagen.grasp_desc_encoder import GraspDescriptionEncoder
 
-from model import GraspEncoder
+from scorer import load_scorer, GraspClassificationScorer
 
 SUPPORT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Table"], {"scale": 0.025})
 OBJECT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Mug", "Pan", "WineGlass"])
@@ -40,9 +34,8 @@ lightings: dict[str, list[dict]] = {}
 scene_grasps: dict[str, np.ndarray] = {}
 scene_preds: dict[str, np.ndarray] = {}
 
-grasp_encoder = GraspEncoder.from_wandb("01JPE6TG0HZVSCVFFJPJ3HKS6W", 15500, map_location="cuda").cuda()
-grasp_rgb_processor = grasp_encoder.create_rgb_processor()
-text_encoder = GraspDescriptionEncoder("cuda:1", full_precision=False)
+grasp_scorer = load_scorer("01JPS1Z35AMR7D18SJW901F51G", ckpt=22500, map_location="cuda")
+
 print("Done loading models")
 
 renderer = pyrender.OffscreenRenderer(640, 480)
@@ -192,7 +185,11 @@ async def get_scene(scene_id: str, key: str):
         print("Similarity range: ", np.nanmin(similarities), np.nanmax(similarities))
         # normalized = (similarities - np.nanmin(similarities)) / (np.nanmax(similarities) - np.nanmin(similarities))
         # colors[in_view_mask] = (cm.viridis(normalized[in_view_mask]) * 255).astype(np.uint8)[:, :3]
-        mask = similarities >= np.percentile(similarities[in_view_mask], 90)
+        if isinstance(grasp_scorer, GraspClassificationScorer):
+            threshold = 0.0
+        else:
+            threshold = np.percentile(similarities[in_view_mask], 90)
+        mask = similarities >= threshold
         colors[in_view_mask & mask] = np.array([0, 255, 0])
         colors[in_view_mask & ~mask] = np.array([255, 0, 0])
         colors[np.nanargmax(similarities)] = np.array([255, 255, 0])
@@ -202,8 +199,6 @@ async def get_scene(scene_id: str, key: str):
         gripper_marker = create_gripper_marker(color=color)
         scene.add_object(ss.TrimeshAsset(gripper_marker), transform=grasp)
 
-    # glb_bytes = io.BytesIO()
-    # scene.export(glb_bytes, file_type="glb")
     scene.export("scene.glb")
     with open("scene.glb", "rb") as f:
         b = f.read()
@@ -229,34 +224,12 @@ async def predict(scene_id: str, body: dict):
     grasp_idxs = get_grasp_idxs_in_view(scenes[scene_id], cam_K, cam_pose, grasps)
     grasps = grasps[grasp_idxs]
     grasps = np.linalg.inv(cam_pose)[None] @ grasps
-    grasps = torch.from_numpy(grasps).float().cuda()
-    batch_size = 128
 
     print("Rendering")
     image, xyz = render(scene, cam_pose, cam_K)
     print("Done rendering")
     image.save("image.png")
-    xyz = torch.from_numpy(xyz).float().permute(2, 0, 1).cuda()
-    rgb: torch.Tensor = grasp_rgb_processor(image).cuda()
-    if rgb.shape[-2:] != xyz.shape[-2:]:
-        xyz = F.interpolate(xyz.unsqueeze(0), size=rgb.shape[-2:], mode='bilinear').squeeze(0)
-
-    print("Encoding query")
-    query_embedding = text_encoder.encode([query])[0]
-    print("Done encoding query")
-    grasp_embeddings = []
-    with torch.no_grad():
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            for i in range(0, len(grasps), batch_size):
-                print(f"Processing batch {i//batch_size + 1} of {math.ceil(len(grasps)/batch_size)}")
-                grasps_batch = grasps[i:i+batch_size]
-                # don't need to repeat rgb and xyz for each grasp
-                rgb_batch = rgb.unsqueeze(0)
-                xyz_batch = xyz.unsqueeze(0)
-                embedding = grasp_encoder(rgb_batch, xyz_batch, grasps_batch)
-                grasp_embeddings.append(embedding.cpu().numpy())
-    grasp_embeddings = np.concatenate(grasp_embeddings, axis=0)
-    similarities = query_embedding @ grasp_embeddings.T
+    similarities = grasp_scorer.score_grasps(cam_pose, image, xyz, grasps, query)
     all_similarities = np.full(n_grasps, np.nan)
     all_similarities[grasp_idxs] = similarities
     scene_preds[scene_id] = all_similarities

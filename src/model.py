@@ -222,16 +222,25 @@ class Model(nn.Module):
             cfg_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ".hydra/config.yaml"))
             config = yaml.safe_load(cfg_bytes)
 
+        def download(remote_path: str):
+            local_path = f"/tmp/semantic-grasping/{dataset}/{remote_path}"
+            if not os.path.isfile(local_path):
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                with open(local_path, "wb") as f:
+                    for chunk in beaker.dataset.stream_file(dataset, remote_path):
+                        f.write(chunk)
+            return local_path
+
         if ckpt is not None:
             ckpt_fileinfos = beaker.dataset.ls(dataset, "checkpoints/")
             ckpt_files = [fi.path for fi in ckpt_fileinfos]
             ckpt_file = min(ckpt_files, key=lambda x: abs(int(x[:-len(".pth")].split("_")[-1]) - ckpt))
-            ckpt_bytes = io.BytesIO(beaker.dataset.get_file(dataset, ckpt_file))
-            ckpt = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
+            ckpt_fn = download(ckpt_file)
+            ckpt = torch.load(ckpt_fn, map_location=map_location, weights_only=True)
             state_dict = ckpt["model"]
         else:
-            ckpt_bytes = beaker.dataset.get_file(dataset, "model.pt")
-            state_dict = torch.load(ckpt_bytes, map_location=map_location, weights_only=True)
+            ckpt_fn = download("model.pt")
+            state_dict = torch.load(ckpt_fn, map_location=map_location, weights_only=True)
         state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items() if "siglip" not in k.lower()}
         model = cls(config["model"])
         model.load_state_dict(state_dict, strict=False)
@@ -313,6 +322,11 @@ class GraspEncoder(Model):
 
         xyz_features = self.xyz_feature_extractor(xyzs)  # (B, n_patches, xyz_feature_dim)
         xyz_features = self.xyz_feature_encoder(xyz_features)  # (B, n_patches, hidden_dim)
+
+        assert len(patch_features) == len(xyz_features)
+        if len(patch_features) == 1 and len(grasp_poses) > 1:
+            patch_features = patch_features.expand(len(grasp_poses), -1, -1)
+            xyz_features = xyz_features.expand(len(grasp_poses), -1, -1)
 
         grasp_poses = torch.cat([grasp_poses[:, :3, 3], grasp_poses[:, :3, :3].reshape(-1, 9)], dim=1)  # (B, 12)
         grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)
@@ -404,6 +418,12 @@ class GraspClassifier(Model):
 
         text_features = self.text_feature_extractor(text_input_ids, text_attention_mask)  # (B, n_tokens, t5_dim)
         text_features = self.text_feature_encoder(text_features)  # (B, n_tokens, hidden_dim)
+    
+        assert len(patch_features) == len(xyz_features) == len(text_features)
+        if len(patch_features) == 1 and len(grasp_poses) > 1:
+            patch_features = patch_features.expand(len(grasp_poses), -1, -1)
+            xyz_features = xyz_features.expand(len(grasp_poses), -1, -1)
+            text_features = text_features.expand(len(grasp_poses), -1, -1)
 
         # input_sequence = torch.cat([patch_features, text_features, grasp_features], dim=1)  # (B, *, hidden_dim)
         input_sequence = torch.cat([patch_features, xyz_features, grasp_features, text_features], dim=1)  # (B, *, hidden_dim)

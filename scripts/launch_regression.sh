@@ -15,9 +15,12 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --dataset abhayd/$DATASET_NAME:/dataset \
     --dataset abhayd/$OBS_DATASET_NAME:/data \
     --priority normal \
+    --cluster ai2/augusta-google-1 \
+    --cluster ai2/jupiter-cirrascale-2 \
+    --cluster ai2/neptune-cirrascale \
     --cluster ai2/ceres-cirrascale \
     --cluster ai2/prior-elanding \
-    --shared-memory 16GiB \
+    --shared-memory 64GiB \
     --allow-dirty \
     -- \
     python src/train_regression.py
