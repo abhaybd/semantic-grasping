@@ -118,7 +118,8 @@ def main(config: DictConfig):
                 optimizer.zero_grad()
                 rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
                 text_embedding = batch["text_embedding"].cuda()
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                from contextlib import nullcontext
+                with nullcontext(): #torch.autocast("cuda", dtype=torch.bfloat16):
                     infer_start = time.perf_counter()
                     grasp_features = model(rgb, xyz, grasp_pose)
                     infer_end = time.perf_counter()
