@@ -14,7 +14,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 from tqdm import tqdm
-from torchmetrics.classification import BinaryAccuracy, BinaryF1Score
+from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision
 
 from model import GraspClassifier, Checkpointer, WarmupCosineLR
 from data import GraspDescriptionClassificationDataset, GraspDescriptionClassificationSampler
@@ -95,7 +95,8 @@ def main(config: DictConfig):
     model.cuda()
     model.train()
     print("Compiling model...")
-    torch.compile(model)
+    # TODO: use compiled model after debuggin
+    # compiled_model = torch.compile(model)
     print("Done!")
 
     img_processor = model.module.create_rgb_processor()
@@ -117,7 +118,7 @@ def main(config: DictConfig):
     # TODO: get this into the config
     groups = [
         {**config["train"]["optimizer"], "params": [p for n, p in model.named_parameters() if "trf" not in n and "xyz_feature_extractor" not in n]},
-        {"lr": 0.00001, "params": [p for n, p in model.named_parameters() if "trf" in n or "xyz_feature_extractor" in n]},
+        {**config["train"]["optimizer"], "params": [p for n, p in model.named_parameters() if "trf" in n or "xyz_feature_extractor" in n]},
     ]
 
     optimizer = optim.AdamW(groups)
@@ -133,7 +134,8 @@ def main(config: DictConfig):
 
     metrics = {
         "f1": BinaryF1Score(),
-        "accuracy": BinaryAccuracy()
+        "accuracy": BinaryAccuracy(),
+        "precision": BinaryPrecision()
     }
     for metric in metrics.values():
         metric.cuda()
@@ -143,30 +145,33 @@ def main(config: DictConfig):
         while step < config["train"]["steps"]:
             for batch in train_loader:
                 optimizer.zero_grad()
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
-                    text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
-                    labels = batch["label"].cuda()
+                rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
+                text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
+                labels = batch["label"].cuda()
+                from contextlib import nullcontext
+                with nullcontext(): #torch.autocast("cuda", dtype=torch.bfloat16):
                     infer_start = time.perf_counter()
                     pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
-                    nanmask = torch.isnan(pred_logits)
-                    valid_pred_logits = pred_logits[~nanmask]
-                    valid_labels = labels[~nanmask]
                     infer_end = time.perf_counter()
                     infer_time = infer_end - infer_start
-                    loss = F.binary_cross_entropy_with_logits(valid_pred_logits, valid_labels)
-                    variance = torch.var(valid_pred_logits).item()
+                    nanmask = torch.isnan(pred_logits)
+                    if not nanmask.all():
+                        pred_logits = pred_logits[~nanmask]
+                        labels = labels[~nanmask]
+                loss = F.binary_cross_entropy_with_logits(pred_logits, labels)
+                variance = torch.var(pred_logits).item()
                 loss.backward()
                 optimizer.step()
                 lr_scheduler.step()
 
-                metric_values = {k: metric(valid_pred_logits, valid_labels).item() for k, metric in metrics.items()}
+                metric_values = {k: metric(F.sigmoid(pred_logits), labels).item() for k, metric in metrics.items()}
                 info = {
                     "epoch": step // len(train_loader),
                     "loss": loss.item(),
                     "lr": np.mean(lr_scheduler.get_last_lr()),
                     "variance": variance,
                     "infer_time": infer_time,
+                    "nan_frac": nanmask.float().mean().item(),
                     **metric_values,
                 }
 
