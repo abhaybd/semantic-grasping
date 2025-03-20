@@ -2,6 +2,8 @@ hydra:
   run:
     dir: /results
 
+type: classification
+
 model:
   hidden_dim: 512
   feature_layers: [1024]

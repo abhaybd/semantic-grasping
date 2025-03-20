@@ -2,6 +2,8 @@ hydra:
   run:
     dir: /results
 
+type: regression
+
 model:
   embed_dim: 4096
   hidden_dim: 512
