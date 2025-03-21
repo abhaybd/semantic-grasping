@@ -200,7 +200,7 @@ class GraspDescriptionClassificationDataset(Dataset):
 
         subsets = []
         for idxs in indices:
-            sub_df = df.iloc[idxs]
+            sub_df = df.iloc[idxs].reset_index(drop=True, inplace=False)
             dataset = cls(
                 sub_df,
                 data_dir,
