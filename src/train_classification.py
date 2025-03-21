@@ -38,7 +38,7 @@ def test(model: nn.Module, test_loader: DataLoader):
         text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
         pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
         batch_loss = F.binary_cross_entropy_with_logits(pred_logits, labels)
-        losses.extend(batch_loss.tolist())
+        losses.append(batch_loss.item())
         variances.append(torch.var(pred_logits, dim=0).mean().item())
 
         for metric in metrics.values():
