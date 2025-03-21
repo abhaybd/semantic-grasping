@@ -1,6 +1,7 @@
+from functools import cached_property
+
 import torch
 import torch.nn as nn
-import numpy as np
 import torch.nn.functional as F
 
 class Tnet(nn.Module):
@@ -92,6 +93,22 @@ class PointNet(nn.Module):
         output = self.fc3(xb)
         return self.logsoftmax(output), matrix3x3, matrix64x64
 
+class PointNetEncoder(nn.Module):
+    def __init__(self, transform: Transform):
+        super().__init__()
+        self.transform = transform
+
+    @cached_property
+    def embed_dim(self):
+        device = next(self.transform.parameters()).device
+        x = torch.randn(1, 3, 1, device=device)
+        return self(x).shape[-1]
+
+    def forward(self, x):
+        """
+        Expects (B, 3, N) points, returns (B, embed_dim) features
+        """
+        return self.transform(x)[0]
 
 def load_pretrained_pn_encoder():
     dl_path = "/tmp/pretrained_pointnet/pointnet.pth"
@@ -103,10 +120,21 @@ def load_pretrained_pn_encoder():
         urllib.request.urlretrieve(url, dl_path)
     model = PointNet()
     model.load_state_dict(torch.load(dl_path, map_location="cpu", weights_only=True))
-    return model.transform
+    return PointNetEncoder(model.transform)
 
 if __name__ == "__main__":
     model = load_pretrained_pn_encoder()
-    print(model)
-    breakpoint()
-    pass
+    model.eval()
+    point_patches = torch.randn(1, 3, 16, 16, 256)
+
+    gt_features = torch.zeros(1, 16, 16, model.embed_dim)
+    with torch.no_grad():
+        for i in range(16):
+            for j in range(16):
+                gt_features[:, i, j, :] = model(point_patches[:, :, i, j, :])
+
+    points = point_patches.permute(0, 2, 3, 1, 4).reshape(-1, 3, 256)
+    with torch.no_grad():
+        out = model(points)
+    patch_features = out.reshape(-1, 16, 16, model.embed_dim)
+    print(torch.allclose(gt_features, patch_features, atol=5e-4))
