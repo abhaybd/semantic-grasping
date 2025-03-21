@@ -129,7 +129,7 @@ class GraspDescriptionRegressionDataset(Dataset):
 class GraspDescriptionClassificationDataset(Dataset):
     def __init__(
         self,
-        csv_path: str,
+        data_df: pd.DataFrame,
         data_dir: str,
         img_processor: Callable[[Image.Image], torch.Tensor],
         text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
@@ -137,7 +137,7 @@ class GraspDescriptionClassificationDataset(Dataset):
         augmentation_params: Optional[dict] = None
     ):
         self.data_dir = data_dir
-        self.data_df = pd.read_csv(csv_path)
+        self.data_df = data_df
         aug_params = augmentation_params or {}
         self.transform = ImageAugmentation(**aug_params) if augment else None
         self.img_processor = img_processor
@@ -153,6 +153,64 @@ class GraspDescriptionClassificationDataset(Dataset):
 
     def __len__(self):
         return len(self.data_df) * self.n_unique_annots
+
+    @classmethod
+    def load(
+        cls,
+        csv_path: str,
+        data_dir: str,
+        img_processor: Callable[[Image.Image], torch.Tensor],
+        text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
+        augment: bool = True,
+        augmentation_params: Optional[dict] = None
+    ):
+        df = pd.read_csv(csv_path)
+        return cls(
+            df,
+            data_dir,
+            img_processor,
+            text_processor,
+            augment,
+            augmentation_params
+        )
+
+    @classmethod
+    def load_split(
+        cls,
+        csv_path: str,
+        data_dir: str,
+        img_processor: Callable[[Image.Image], torch.Tensor],
+        text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
+        fracs: list[float],
+        augment: bool = True,
+        augmentation_params: Optional[dict] = None,
+        seed: Optional[int] = None
+    ) -> list["GraspDescriptionClassificationDataset"]:
+        assert np.isclose(sum(fracs), 1.0)
+        if len(fracs) == 1:
+            return [cls.load(csv_path, data_dir, img_processor, text_processor, augment, augmentation_params)]
+        df = pd.read_csv(csv_path)
+        n_rows = len(df)
+        shuffled_indices = np.random.RandomState(seed=seed).permutation(n_rows)
+
+        # Compute partition sizes and split indices
+        sizes = (np.array(fracs) * n_rows).astype(int)
+        sizes[-1] += n_rows - sizes.sum()  # Ensure the sum of sizes equals n_rows
+        indices = np.split(shuffled_indices, np.cumsum(sizes)[:-1])
+
+        subsets = []
+        for idxs in indices:
+            sub_df = df.iloc[idxs]
+            dataset = cls(
+                sub_df,
+                data_dir,
+                img_processor,
+                text_processor,
+                augment,
+                augmentation_params
+            )
+            subsets.append(dataset)
+        return subsets
 
     def __getitem__(self, idx):
         annot_idx, obs_idx = divmod(idx, len(self.data_df))

@@ -27,8 +27,11 @@ def test(model: nn.Module, test_loader: DataLoader):
     variances = []
     metrics = {
         "f1": BinaryF1Score(),
-        "accuracy": BinaryAccuracy()
+        "accuracy": BinaryAccuracy(),
+        "precision": BinaryPrecision()
     }
+    for metric in metrics.values():
+        metric.cuda()
     for batch in tqdm(test_loader, desc="Test", leave=False):
         rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
         labels = batch["label"].cuda()
@@ -39,7 +42,7 @@ def test(model: nn.Module, test_loader: DataLoader):
         variances.append(torch.var(pred_logits, dim=0).mean().item())
 
         for metric in metrics.values():
-            metric(pred_logits.flatten(), labels)
+            metric(F.sigmoid(pred_logits), labels)
     model.train()
     return {
         "loss": np.mean(losses),
@@ -94,34 +97,29 @@ def main(config: DictConfig):
     model = torch.nn.DataParallel(GraspClassifier(config["model"]))
     model.cuda()
     model.train()
-    print("Compiling model...")
-    # TODO: use compiled model after debuggin
-    # compiled_model = torch.compile(model)
-    print("Done!")
+    # TODO: add torch compilation
 
     img_processor = model.module.create_rgb_processor()
     text_processor = model.module.create_text_processor()
-    dataset = GraspDescriptionClassificationDataset(img_processor=img_processor, text_processor=text_processor, **config["train"]["dataset"])
     test_frac = config["train"]["test"]["frac"]
     if test_frac > 0:
-        gen = torch.Generator().manual_seed(config["train"]["seed"])
-        # TODO: this doesn't work, since random splitting breaks the sampler. Maybe just re-implement the splitting?
-        train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
+        train_dataset, test_dataset = GraspDescriptionClassificationDataset.load_split(
+            img_processor=img_processor,
+            text_processor=text_processor,
+            **config["train"]["dataset"],
+            fracs=[1 - test_frac, test_frac],
+            seed=config["train"]["seed"]
+        )
         train_sampler = GraspDescriptionClassificationSampler(train_dataset)
         train_loader = DataLoader(train_dataset, sampler=train_sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
         test_loader = DataLoader(test_dataset, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
     else:
+        dataset = GraspDescriptionClassificationDataset.load(img_processor=img_processor, text_processor=text_processor, **config["train"]["dataset"])
         sampler = GraspDescriptionClassificationSampler(dataset)
         train_loader = DataLoader(dataset, sampler=sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
         test_loader = None
 
-    # TODO: get this into the config
-    groups = [
-        {**config["train"]["optimizer"], "params": [p for n, p in model.named_parameters() if "trf" not in n and "xyz_feature_extractor" not in n]},
-        {**config["train"]["optimizer"], "params": [p for n, p in model.named_parameters() if "trf" in n or "xyz_feature_extractor" in n]},
-    ]
-
-    optimizer = optim.AdamW(groups)
+    optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
     lr_scheduler = WarmupCosineLR(
         optimizer,
         config["train"]["lr_schedule"]["warmup_steps"],
@@ -149,6 +147,7 @@ def main(config: DictConfig):
                 text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
                 labels = batch["label"].cuda()
                 from contextlib import nullcontext
+                # TODO: add back mixed-precision with gradscaler
                 with nullcontext(): #torch.autocast("cuda", dtype=torch.bfloat16):
                     infer_start = time.perf_counter()
                     pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
