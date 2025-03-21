@@ -50,3 +50,7 @@ train:
   steps: 50000
   save_period: 2500
   seed: 42
+  grad_scaler:
+    enabled: true
+  autocast:
+    enabled: true

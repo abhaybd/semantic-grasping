@@ -8,7 +8,6 @@ from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.utils.data import random_split
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -138,6 +137,8 @@ def main(config: DictConfig):
     for metric in metrics.values():
         metric.cuda()
 
+    scaler = torch.GradScaler(**config["train"]["grad_scaler"])
+
     step = start_step
     with tqdm(total=config["train"]["steps"], initial=start_step, desc="Training") as pbar:
         while step < config["train"]["steps"]:
@@ -146,9 +147,7 @@ def main(config: DictConfig):
                 rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
                 text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
                 labels = batch["label"].cuda()
-                from contextlib import nullcontext
-                # TODO: add back mixed-precision with gradscaler
-                with nullcontext(): #torch.autocast("cuda", dtype=torch.bfloat16):
+                with torch.autocast("cuda", dtype=torch.bfloat16, **config["train"]["autocast"]):
                     infer_start = time.perf_counter()
                     pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
                     infer_end = time.perf_counter()
@@ -157,10 +156,11 @@ def main(config: DictConfig):
                     if not nanmask.all():
                         pred_logits = pred_logits[~nanmask]
                         labels = labels[~nanmask]
-                loss = F.binary_cross_entropy_with_logits(pred_logits, labels)
+                    loss = F.binary_cross_entropy_with_logits(pred_logits, labels)
                 variance = torch.var(pred_logits).item()
-                loss.backward()
-                optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 lr_scheduler.step()
 
                 metric_values = {k: metric(F.sigmoid(pred_logits), labels).item() for k, metric in metrics.items()}
