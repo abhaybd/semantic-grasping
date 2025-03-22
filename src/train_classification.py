@@ -142,11 +142,15 @@ def main(config: DictConfig):
     step = start_step
     with tqdm(total=config["train"]["steps"], initial=start_step, desc="Training") as pbar:
         while step < config["train"]["steps"]:
+            batch_load_start = time.perf_counter()
             for batch in train_loader:
+                batch_load_end = time.perf_counter()
+                batch_load_time = batch_load_end - batch_load_start
                 optimizer.zero_grad()
                 rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
                 text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
                 labels = batch["label"].cuda()
+                train_step_start = time.perf_counter()
                 with torch.autocast("cuda", dtype=torch.bfloat16, **config["train"]["autocast"]):
                     infer_start = time.perf_counter()
                     pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
@@ -162,6 +166,8 @@ def main(config: DictConfig):
                 scaler.step(optimizer)
                 scaler.update()
                 lr_scheduler.step()
+                train_step_end = time.perf_counter()
+                train_step_time = train_step_end - train_step_start
 
                 metric_values = {k: metric(F.sigmoid(pred_logits), labels).item() for k, metric in metrics.items()}
                 info = {
@@ -170,6 +176,8 @@ def main(config: DictConfig):
                     "lr": np.mean(lr_scheduler.get_last_lr()),
                     "variance": variance,
                     "infer_time": infer_time,
+                    "train_step_time": train_step_time,
+                    "batch_load_time": batch_load_time,
                     "nan_frac": nanmask.float().mean().item(),
                     **metric_values,
                 }
@@ -189,6 +197,7 @@ def main(config: DictConfig):
                     break
                 if torch.isnan(loss):
                     raise ValueError("Loss is NaN")
+                batch_load_start = time.perf_counter()
 
     save_path = os.path.join(out_dir, "model.pt")
     torch.save(model.module.state_dict(), save_path)
