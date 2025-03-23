@@ -126,7 +126,15 @@ def main(config: DictConfig):
         config["train"]["lr_schedule"]["final_factor"]
     )
 
-    checkpointer = Checkpointer(ckpt_dir, model=model.module, optimizer=optimizer, lr_scheduler=lr_scheduler)
+    scaler = torch.GradScaler(**config["train"]["grad_scaler"])
+
+    checkpointer = Checkpointer(
+        ckpt_dir,
+        model=model.module,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        scaler=scaler
+    )
     start_step = checkpointer.load()
 
     metrics = {
@@ -136,8 +144,6 @@ def main(config: DictConfig):
     }
     for metric in metrics.values():
         metric.cuda()
-
-    scaler = torch.GradScaler(**config["train"]["grad_scaler"])
 
     step = start_step
     with tqdm(total=config["train"]["steps"], initial=start_step, desc="Training") as pbar:
@@ -179,6 +185,7 @@ def main(config: DictConfig):
                     "train_step_time": train_step_time,
                     "batch_load_time": batch_load_time,
                     "nan_frac": nanmask.float().mean().item(),
+                    "grad_scale": scaler.get_scale(),
                     **metric_values,
                 }
 
