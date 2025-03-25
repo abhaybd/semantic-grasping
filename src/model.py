@@ -1,6 +1,6 @@
 import os
 import io
-from typing import Any, Protocol, Optional
+from typing import Any, Protocol, Optional, Callable
 import math
 from contextlib import nullcontext
 import yaml
@@ -22,9 +22,15 @@ class StateDictProtocol(Protocol):
     def load_state_dict(self, state_dict: dict[str, Any]):
         ...
 
-class EncoderProtocol(Protocol, nn.Module):
+class EncoderProtocol(Protocol):
     @property
     def embed_dim(self) -> int:
+        ...
+
+    def __call__(self, **kwargs: Any) -> torch.Tensor:
+        ...
+
+    def create_processor(self) -> Callable[[Any], torch.Tensor]:
         ...
 
 class Checkpointer:
@@ -111,7 +117,7 @@ class SiglipPatchFeatureExtractor(nn.Module):
 
 
 class T5TextEncoder(nn.Module):
-    def __init__(self, checkpoint="google-t5/t5-base", max_length=128, frozen=True):
+    def __init__(self, hidden_dim: int, feature_layers: list[int], checkpoint="google-t5/t5-base", max_length=128, frozen=True):
         super().__init__()
         self.tokenizer = T5Tokenizer.from_pretrained(checkpoint, legacy=True)
         self.encoder = T5EncoderModel.from_pretrained(checkpoint)
@@ -119,10 +125,7 @@ class T5TextEncoder(nn.Module):
         if frozen:
             for param in self.encoder.parameters():
                 param.requires_grad = False
-
-    @property
-    def embed_dim(self):
-        return self.encoder.config.d_model
+        self.mlp = create_mlp(self.encoder.config.d_model, hidden_dim, feature_layers)
 
     def create_processor(self):
         def fn(text: str | list[str]) -> tuple[torch.LongTensor, torch.FloatTensor]:
@@ -139,7 +142,22 @@ class T5TextEncoder(nn.Module):
         Returns (B, max_length, embed_dim) features
         """
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        return outputs.last_hidden_state
+        hidden_states = outputs.last_hidden_state  # (B, max_length, embed_dim)
+        return self.mlp(hidden_states)  # (B, max_length, hidden_dim)
+
+class NVEmbedTextEncoder(nn.Module):
+    def __init__(self, hidden_dim: int, feature_layers: list[int]):
+        super().__init__()
+        self.mlp = create_mlp(4096, hidden_dim, feature_layers)
+
+    def create_processor(self):
+        def fn(x):
+            raise ValueError("NVEmbedTextEncoder does not support creating a processor")
+        return fn
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp(x)
+
 
 class CustomBatchNorm(nn.Module):
     def __init__(self, num_features: int, **kwargs):
@@ -193,6 +211,19 @@ class ViTEncoder(torch.nn.Module):
     @property
     def embed_dim(self):
         return self.model.hidden_dim
+
+def create_text_encoder(hidden_dim: int, **config: Any) -> EncoderProtocol:
+    enc_type = config["type"]
+    config = config.copy()
+    del config["type"]
+    config["hidden_dim"] = hidden_dim
+    match enc_type:
+        case "t5":
+            return T5TextEncoder(**config)
+        case "nvembed":
+            return NVEmbedTextEncoder(**config)
+        case _:
+            raise ValueError(f"Unknown text encoder type: {enc_type}")
 
 def create_xyz_encoder(**config: Any) -> EncoderProtocol:
     enc_type = config["type"]
@@ -367,7 +398,6 @@ class GraspClassifier(Model):
         xyz_feature_layers: list[int] = config["xyz_feature_layers"]
         grasp_layers: list[int] = config["grasp_layers"]
         final_fc_layers: list[int] = config["final_fc_layers"]
-        text_feature_layers: list[int] = config["text_feature_layers"]
 
         self.pos_encoding = PositionalEncoding(hidden_dim)
 
@@ -384,8 +414,11 @@ class GraspClassifier(Model):
         # encoder for grasp pose
         self.grasp_pose_encoder = create_mlp(12, hidden_dim, grasp_layers)
 
-        self.text_feature_extractor = T5TextEncoder(**config["text_encoder"])
-        self.text_feature_encoder = create_mlp(self.text_feature_extractor.embed_dim, hidden_dim, text_feature_layers)
+        self.text_encoder = create_text_encoder(
+            hidden_dim=hidden_dim,
+            **config["text_encoder"]
+        )
+
         self.feature_ln = nn.LayerNorm(hidden_dim)
 
         self.class_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
@@ -406,14 +439,13 @@ class GraspClassifier(Model):
         return self.rgb_feature_extractor.create_processor()
 
     def create_text_processor(self):
-        return self.text_feature_extractor.create_processor()
+        return self.text_encoder.create_processor()
 
     def forward(self,
         rgbs: torch.Tensor,
         xyzs: torch.Tensor,
         grasp_poses: torch.Tensor,
-        text_input_ids: torch.LongTensor,
-        text_attention_mask: Optional[torch.FloatTensor] = None
+        text_inputs: dict[str, torch.Tensor]
     ):
         """
         Expects (B, 3, H, W) rgbs, (B, 3, H, W) xyzs, (B, 4, 4) grasp_poses, (B, max_length) text_input_ids, (B, max_length) text_attention_mask
@@ -430,8 +462,7 @@ class GraspClassifier(Model):
         grasp_features: torch.Tensor = self.grasp_pose_encoder(grasp_poses)  # (B, hidden_dim)
         grasp_features = grasp_features.unsqueeze(1)  # (B, 1, hidden_dim)
 
-        text_features = self.text_feature_extractor(text_input_ids, text_attention_mask)  # (B, n_tokens, t5_dim)
-        text_features = self.text_feature_encoder(text_features)  # (B, n_tokens, hidden_dim)
+        text_features = self.text_encoder(**text_inputs)  # (B, *, hidden_dim)
     
         assert len(patch_features) == len(xyz_features) == len(text_features)
         if len(patch_features) == 1 and len(grasp_poses) > 1:

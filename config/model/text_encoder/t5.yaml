@@ -1,0 +1,4 @@
+type: t5
+frozen: true
+max_length: 256
+feature_layers: [1024]

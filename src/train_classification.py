@@ -154,12 +154,12 @@ def main(config: DictConfig):
                 batch_load_time = batch_load_end - batch_load_start
                 optimizer.zero_grad()
                 rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
-                text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
+                text_inputs = {k: v.cuda() for k, v in batch["text_inputs"].items()}
                 labels = batch["label"].cuda()
                 train_step_start = time.perf_counter()
                 with torch.autocast("cuda", dtype=torch.bfloat16, **config["train"]["autocast"]):
                     infer_start = time.perf_counter()
-                    pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
+                    pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_inputs)
                     infer_end = time.perf_counter()
                     infer_time = infer_end - infer_start
                     nanmask = torch.isnan(pred_logits)

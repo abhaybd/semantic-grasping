@@ -137,11 +137,13 @@ class GraspDescriptionClassificationDataset(Dataset):
         data_dir: str,
         img_processor: Callable[[Image.Image], torch.Tensor],
         text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
+        text_embeddings: Optional[np.ndarray] = None,
         augment: bool = True,
         augmentation_params: Optional[dict] = None
     ):
         self.data_dir = data_dir
         self.data_df = data_df
+        self.text_embeddings = text_embeddings
         aug_params = augmentation_params or {}
         self.transform = ImageAugmentation(**aug_params) if augment else None
         self.img_processor = img_processor
@@ -165,15 +167,19 @@ class GraspDescriptionClassificationDataset(Dataset):
         data_dir: str,
         img_processor: Callable[[Image.Image], torch.Tensor],
         text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
+        text_embedding_path: Optional[str] = None,
+        use_frozen_text_embeddings: bool = False,
         augment: bool = True,
         augmentation_params: Optional[dict] = None
     ):
         df = pd.read_csv(csv_path)
+        text_embeddings = np.load(text_embedding_path) if text_embedding_path is not None and use_frozen_text_embeddings else None
         return cls(
             df,
             data_dir,
             img_processor,
             text_processor,
+            text_embeddings,
             augment,
             augmentation_params
         )
@@ -187,6 +193,8 @@ class GraspDescriptionClassificationDataset(Dataset):
         text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
         fracs: list[float],
         augment: bool = True,
+        text_embedding_path: str = None,
+        use_frozen_text_embeddings: bool = False,
         augmentation_params: Optional[dict] = None,
         seed: Optional[int] = None
     ) -> list["GraspDescriptionClassificationDataset"]:
@@ -194,6 +202,7 @@ class GraspDescriptionClassificationDataset(Dataset):
         if len(fracs) == 1:
             return [cls.load(csv_path, data_dir, img_processor, text_processor, augment, augmentation_params)]
         df = pd.read_csv(csv_path)
+        text_embeddings = np.load(text_embedding_path) if text_embedding_path is not None and use_frozen_text_embeddings else None
         n_rows = len(df)
         shuffled_indices = np.random.RandomState(seed=seed).permutation(n_rows)
 
@@ -205,11 +214,13 @@ class GraspDescriptionClassificationDataset(Dataset):
         subsets = []
         for idxs in indices:
             sub_df = df.iloc[idxs].reset_index(drop=True, inplace=False)
+            sub_embeddings = text_embeddings[idxs] if text_embeddings is not None else None
             dataset = cls(
                 sub_df,
                 data_dir,
                 img_processor,
                 text_processor,
+                sub_embeddings,
                 augment,
                 augmentation_params
             )
@@ -230,8 +241,18 @@ class GraspDescriptionClassificationDataset(Dataset):
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
         grasp_pose = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
 
-        annotation = self.unique_annots[annot_idx]
-        text_input_ids, text_attention_mask = self.text_processor(annotation)
+        if self.text_embeddings is not None:
+            text_embedding = self.text_embeddings[obs_idx]
+            text_inputs = {
+                "text_embedding": text_embedding,
+            }
+        else:
+            annotation = self.unique_annots[annot_idx]
+            text_input_ids, text_attention_mask = self.text_processor(annotation)
+            text_inputs = {
+                "input_ids": text_input_ids,
+                "attention_mask": text_attention_mask,
+            }
 
         if self.transform is not None:
             rgb, xyz, grasp_pose = self.transform(rgb, xyz, grasp_pose)
@@ -247,8 +268,7 @@ class GraspDescriptionClassificationDataset(Dataset):
             "rgb": rgb,
             "xyz": xyz,
             "grasp_pose": grasp_pose,
-            "text_input_ids": text_input_ids,
-            "text_attention_mask": text_attention_mask,
+            "text_inputs": text_inputs,
             "label": label,
         }
 
