@@ -22,6 +22,10 @@ class StateDictProtocol(Protocol):
     def load_state_dict(self, state_dict: dict[str, Any]):
         ...
 
+class EncoderProtocol(Protocol, nn.Module):
+    @property
+    def embed_dim(self) -> int:
+        ...
 
 class Checkpointer:
     def __init__(self, ckpt_dir: str, **modules: StateDictProtocol):
@@ -190,6 +194,16 @@ class ViTEncoder(torch.nn.Module):
     def embed_dim(self):
         return self.model.hidden_dim
 
+def create_xyz_encoder(**config: Any) -> EncoderProtocol:
+    enc_type = config["type"]
+    config = config.copy()
+    del config["type"]
+    match enc_type:
+        case "vit":
+            return ViTEncoder(**config)
+        case _:
+            raise ValueError(f"Unknown xyz encoder type: {enc_type}")
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
         super().__init__()
@@ -284,7 +298,7 @@ class GraspEncoder(Model):
 
         self.pos_encoding = PositionalEncoding(hidden_dim)
 
-        self.xyz_feature_extractor = ViTEncoder(
+        self.xyz_feature_extractor = create_xyz_encoder(
             image_size=self.feature_extractor.image_size,
             patch_size=self.feature_extractor.patch_size,
             **config["xyz_encoder"]
@@ -360,7 +374,7 @@ class GraspClassifier(Model):
         self.rgb_feature_extractor = SiglipPatchFeatureExtractor(**config["rgb_encoder"])
         self.rgb_feature_encoder = create_mlp(self.rgb_feature_extractor.embed_dim, hidden_dim, feature_layers)
 
-        self.xyz_feature_extractor = ViTEncoder(
+        self.xyz_feature_extractor = create_xyz_encoder(
             image_size=self.rgb_feature_extractor.image_size,
             patch_size=self.rgb_feature_extractor.patch_size,
             **config["xyz_encoder"]

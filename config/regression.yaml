@@ -2,6 +2,10 @@ hydra:
   run:
     dir: /results
 
+defaults:
+  - model/xyz_encoder: vit
+  - _self_
+
 type: regression
 
 model:
@@ -13,11 +17,6 @@ model:
   final_fc_layers: [2048, 2048]
   rgb_encoder:
     frozen: true
-  xyz_encoder:
-    num_layers: 4
-    num_heads: 4
-    hidden_dim: 768
-    mlp_dim: 3072
   transformer:
     nhead: 4
     num_encoder_layers: 3

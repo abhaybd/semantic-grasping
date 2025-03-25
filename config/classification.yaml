@@ -2,6 +2,10 @@ hydra:
   run:
     dir: /results
 
+defaults:
+  - model/xyz_encoder: vit
+  - _self_
+
 type: classification
 
 model:
@@ -13,11 +17,6 @@ model:
   text_feature_layers: [1024]
   rgb_encoder:
     frozen: true
-  xyz_encoder:
-    num_layers: 4
-    num_heads: 4
-    hidden_dim: 768
-    mlp_dim: 3072
   text_encoder:
     max_length: 256
     frozen: true
