@@ -8,6 +8,7 @@ import torchvision.transforms.v2 as T
 from torchvision.transforms.v2 import functional as trfF
 
 import pandas as pd
+import h5py
 from PIL import Image
 from scipy.spatial.transform import Rotation as R
 
@@ -44,7 +45,6 @@ class ImageAugmentation:
             xyz = torch.flip(xyz, dims=[-1])
             xyz[0] = -xyz[0]  # Flip x-coordinates
             # flip x position of grasp and reflect approach vector
-            # TODO: verify this is correct
             grasp_pose[0, 3] = -grasp_pose[0, 3]
             new_z = grasp_pose[:3, 2]
             new_z[0] = -new_z[0]
@@ -63,6 +63,12 @@ class ImageAugmentation:
 
         return rgb, xyz, grasp_pose
 
+def load_obs(data_dir: str, row) -> tuple[Image.Image, np.ndarray, np.ndarray]:
+    with h5py.File(os.path.join(data_dir, row["scene_path"]), "r") as f:
+        rgb = Image.fromarray(f["rgb_array"][:]).convert("RGB")
+        xyz = f["xyz"][:]
+        grasp_pose = f["grasp_pose"][:]
+    return rgb, xyz, grasp_pose
 
 class GraspDescriptionRegressionDataset(Dataset):
     def __init__(
@@ -98,9 +104,7 @@ class GraspDescriptionRegressionDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data_df.iloc[idx]
 
-        rgb = Image.open(os.path.join(self.data_dir, row["rgb_path"])).convert("RGB")
-        xyz = np.load(os.path.join(self.data_dir, row["xyz_path"]))
-        grasp_pose = np.load(os.path.join(self.data_dir, row["grasp_pose_path"]))
+        rgb, xyz, grasp_pose = load_obs(self.data_dir, row)
 
         trf = np.eye(4)
         trf[[1,2]] = -trf[[1,2]]
@@ -216,9 +220,7 @@ class GraspDescriptionClassificationDataset(Dataset):
         annot_idx, obs_idx = divmod(idx, len(self.data_df))
         row = self.data_df.iloc[obs_idx]
 
-        rgb = Image.open(os.path.join(self.data_dir, row["rgb_path"])).convert("RGB")
-        xyz = np.load(os.path.join(self.data_dir, row["xyz_path"]))
-        grasp_pose = np.load(os.path.join(self.data_dir, row["grasp_pose_path"]))
+        rgb, xyz, grasp_pose = load_obs(self.data_dir, row)
 
         trf = np.eye(4)
         trf[[1,2]] = -trf[[1,2]]

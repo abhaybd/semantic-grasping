@@ -24,8 +24,8 @@ model:
 
 train:
   dataloader:
-    batch_size: 128
-    num_workers: 12
+    batch_size: 256
+    num_workers: 16
   dataset:
     augment: true
     augmentation_params:
@@ -33,7 +33,7 @@ train:
       gray_scale_prob: 0.1
       horizontal_flip_prob: 0.5
       flip_grasp_prob: 0.5
-    data_dir: /data
+    data_dir: /data/observations
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
   optimizer:
