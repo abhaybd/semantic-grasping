@@ -65,9 +65,9 @@ class ImageAugmentation:
 
 def load_obs(data_dir: str, row) -> tuple[Image.Image, np.ndarray, np.ndarray]:
     with h5py.File(os.path.join(data_dir, row["scene_path"]), "r") as f:
-        rgb = Image.fromarray(f["rgb_array"][:]).convert("RGB")
-        xyz = f["xyz"][:]
-        grasp_pose = f["grasp_pose"][:]
+        rgb = Image.fromarray(f[row["rgb_key"]][:]).convert("RGB")
+        xyz = f[row["xyz_key"]][:]
+        grasp_pose = f[row["grasp_pose_key"]][:]
     return rgb, xyz, grasp_pose
 
 class GraspDescriptionRegressionDataset(Dataset):
@@ -149,12 +149,12 @@ class GraspDescriptionClassificationDataset(Dataset):
         self.img_processor = img_processor
         self.text_processor = text_processor
 
-        self.unique_annots = self.data_df["text"].unique().tolist()
+        self.unique_annots = self.data_df["annot"].unique().tolist()
         annot_to_idx = {annot: i for i, annot in enumerate(self.unique_annots)}
         self.n_unique_annots = len(self.unique_annots)
         self.obs_to_annot_id = np.empty(len(self.data_df), dtype=np.uint32)
         for i, row in self.data_df.iterrows():
-            annot = row["text"]
+            annot = row["annot"]
             self.obs_to_annot_id[i] = annot_to_idx[annot]
 
     def __len__(self):

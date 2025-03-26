@@ -155,8 +155,14 @@ class NVEmbedTextEncoder(nn.Module):
             raise ValueError("NVEmbedTextEncoder does not support creating a processor")
         return fn
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.mlp(x)
+    def forward(self, text_embedding: torch.Tensor) -> torch.Tensor:
+        # add batch dimension if not present
+        if text_embedding.ndim == 1:
+            text_embedding = text_embedding.unsqueeze(0)
+        # add sequence dimension if not present
+        if text_embedding.ndim == 2:
+            text_embedding = text_embedding.unsqueeze(1)
+        return self.mlp(text_embedding)  # (B, 1, hidden_dim)
 
 
 class CustomBatchNorm(nn.Module):

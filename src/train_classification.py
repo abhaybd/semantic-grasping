@@ -34,8 +34,8 @@ def test(model: nn.Module, test_loader: DataLoader):
     for batch in tqdm(test_loader, desc="Test", leave=False):
         rgb, xyz, grasp_pose = batch["rgb"].cuda(), batch["xyz"].cuda(), batch["grasp_pose"].cuda()
         labels = batch["label"].cuda()
-        text_input_ids, text_attention_mask = batch["text_input_ids"].cuda(), batch["text_attention_mask"].cuda()
-        pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_input_ids, text_attention_mask)
+        text_inputs = {k: v.cuda() for k, v in batch["text_inputs"].items()}
+        pred_logits: torch.Tensor = model(rgb, xyz, grasp_pose, text_inputs)
         batch_loss = F.binary_cross_entropy_with_logits(pred_logits, labels)
         losses.append(batch_loss.item())
         variances.append(torch.var(pred_logits, dim=0).mean().item())
