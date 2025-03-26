@@ -52,7 +52,7 @@ class GraspRegressionScorer(GraspScorer):
         grasps = trf[None] @ grasps
         grasps = torch.from_numpy(grasps).float().to(self.device)
 
-        query_embedding = self.query_encoder.encode([query], is_query=True)[0]
+        query_embedding = self.query_encoder.encode([query], is_query=False)[0]
         grasp_embeddings = []
         batch_size = 128
         with torch.no_grad():
@@ -119,8 +119,9 @@ def load_scorer(run_id: str, ckpt: int | None = None, map_location: str = "cpu")
     
     if "type" not in config:
         config["type"] = "classification" if "text_encoder" in config["model"] else "regression"
-        print("Inferring scorer type as:", config["type"])
+        print("Inferring scorer type")
 
+    print("Loading scorer type:", config["type"])
     if config["type"] == "regression":
         grasp_encoder = GraspEncoder.from_wandb(run_id, ckpt, map_location=map_location)
         query_encoder = GraspDescriptionEncoder("cuda:1")
