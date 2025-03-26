@@ -9,6 +9,7 @@ hydra-core~=1.3.2
 beaker-py~=1.34.1
 torchmetrics~=1.6.3
 sentencepiece~=0.2.0
+h5py~=3.12.1
 
 transformers @ git+https://github.com/huggingface/transformers@159445d044623a4eba23ceb96dc7bd5bda51aa1a
 nv_embed_v2 @ git+https://github.com/abhaybd/NV-Embed-v2_fixed.git
