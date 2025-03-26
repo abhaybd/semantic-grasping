@@ -10,10 +10,11 @@ import torch
 from torch import nn
 from torch import optim
 import torch.nn.functional as F
-from torchvision.models import VisionTransformer
 from torchvision.transforms.v2.functional import resize
 
 from beaker import Beaker
+
+from xyz_encoder import create_xyz_encoder
 
 class StateDictProtocol(Protocol):
     def state_dict(self) -> dict[str, Any]:
@@ -197,27 +198,6 @@ def create_mlp(input_dim: int, output_dim: int, layers: list[int], layer_norm=Tr
         ret.append(nn.ReLU())
     return ret
 
-class ViTEncoder(torch.nn.Module):
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.model = VisionTransformer(**kwargs)
-
-    def forward(self, x):
-        """
-        Expects (B, 3, H, W) input, returns (B, n_patches, hidden_dim) features
-        """
-        x = self.model._process_input(x)
-        # Expand the class token to the full batch
-        batch_class_token = self.model.class_token.expand(len(x), -1, -1)
-        x = torch.cat([batch_class_token, x], dim=1)
-        x = self.model.encoder(x)
-        x = x[:, 1:]  # Remove the class token
-        return x
-
-    @property
-    def embed_dim(self):
-        return self.model.hidden_dim
-
 def create_text_encoder(hidden_dim: int, **config: Any) -> EncoderProtocol:
     enc_type = config["type"]
     config = config.copy()
@@ -230,16 +210,6 @@ def create_text_encoder(hidden_dim: int, **config: Any) -> EncoderProtocol:
             return NVEmbedTextEncoder(**config)
         case _:
             raise ValueError(f"Unknown text encoder type: {enc_type}")
-
-def create_xyz_encoder(**config: Any) -> EncoderProtocol:
-    enc_type = config["type"]
-    config = config.copy()
-    del config["type"]
-    match enc_type:
-        case "vit":
-            return ViTEncoder(**config)
-        case _:
-            raise ValueError(f"Unknown xyz encoder type: {enc_type}")
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
