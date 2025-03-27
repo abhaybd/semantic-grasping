@@ -110,8 +110,9 @@ def main(config: DictConfig):
             seed=config["train"]["seed"]
         )
         train_sampler = GraspDescriptionClassificationSampler(train_dataset)
+        test_sampler = GraspDescriptionClassificationSampler(test_dataset)
         train_loader = DataLoader(train_dataset, sampler=train_sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
-        test_loader = DataLoader(test_dataset, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
+        test_loader = DataLoader(test_dataset, sampler=test_sampler, persistent_workers=True, pin_memory=True, **config["train"]["dataloader"])
     else:
         dataset = GraspDescriptionClassificationDataset.load(img_processor=img_processor, text_processor=text_processor, **config["train"]["dataset"])
         sampler = GraspDescriptionClassificationSampler(dataset)
