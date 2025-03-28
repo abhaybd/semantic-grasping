@@ -104,7 +104,8 @@ class GraspClassificationScorer(GraspScorer):
                 for i in range(0, len(grasps), batch_size):
                     print(f"Processing batch {i//batch_size + 1} of {math.ceil(len(grasps)/batch_size)}")
                     grasps_batch = grasps[i:i+batch_size]
-                    logits = self.classifier(rgb, xyz, grasps_batch, query_input_ids, query_attention_mask)
+                    text_inputs = {"input_ids": query_input_ids, "attention_mask": query_attention_mask}
+                    logits = self.classifier(rgb, xyz, grasps_batch, text_inputs)
                     scores_batch = torch.nn.functional.sigmoid(logits).flatten() * 2 - 1
                     scores.append(scores_batch.float().cpu().numpy())
 

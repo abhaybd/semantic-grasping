@@ -34,7 +34,7 @@ lightings: dict[str, list[dict]] = {}
 scene_grasps: dict[str, np.ndarray] = {}
 scene_preds: dict[str, np.ndarray] = {}
 
-grasp_scorer = load_scorer("01JQ58NM5FHMC1SMERJQB2REPR", ckpt=12500, map_location="cuda")
+grasp_scorer = load_scorer("01JQ58NM5FHMC1SMERJQB2REPR", ckpt=None, map_location="cuda")
 
 print("Done loading models")
 
