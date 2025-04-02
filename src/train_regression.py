@@ -109,7 +109,7 @@ def main(config: DictConfig):
     torch.manual_seed(config["train"]["seed"] + rank)
 
     grasp_encoder = GraspEncoder(config["model"]).to(device_id)
-    model = DDP(grasp_encoder, device_ids=[device_id])
+    model = DDP(grasp_encoder, device_ids=[device_id], find_unused_parameters=True)
     model.train()
 
     img_processor = grasp_encoder.create_rgb_processor()
