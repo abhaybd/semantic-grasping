@@ -25,7 +25,7 @@ train:
   distributed:
     world_size:  # will be populated by code
   dataloader:
-    batch_size: 256  # effective (will be divided by world size)
+    batch_size: 512  # effective (will be divided by world size)
     num_workers: 16  # effective (will be divided by world size)
   dataset:
     augment: true

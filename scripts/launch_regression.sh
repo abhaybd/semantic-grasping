@@ -4,7 +4,7 @@ if [ $# -ne 1 ]; then
 fi
 
 NAME=$1
-DATASET_NAME=dataset_0323_1529
+DATASET_NAME=dataset_0401_2018
 WORLD_SIZE=4
 
 OBS_DATASET=$(python -m semantic_grasping_datagen.get_data_for_dataset abhayd/${DATASET_NAME})
@@ -23,9 +23,8 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --priority normal \
     --cluster ai2/augusta-google-1 \
     --cluster ai2/jupiter-cirrascale-2 \
-    --cluster ai2/neptune-cirrascale \
+    --cluster ai2/saturn-cirrascale \
     --cluster ai2/ceres-cirrascale \
-    --cluster ai2/prior-elanding \
     --shared-memory 128GiB \
     --allow-dirty \
     -- \
