@@ -23,11 +23,12 @@ from model import GraspEncoder, Checkpointer, WarmupCosineLR
 from data import GraspDescriptionRegressionDataset
 
 @torch.no_grad()
-def test(model: nn.Module, test_loader: DataLoader, device_id: int, world_size: int):
+def test(model: nn.Module, test_loader: DataLoader, rank: int, world_size: int):
     model.eval()
     losses = []
     variances = []
-    for batch in tqdm(test_loader, desc="Test", leave=False):
+    device_id = rank % torch.cuda.device_count()
+    for batch in tqdm(test_loader, desc="Test", leave=False, disable=rank != 0):
         rgb, xyz, grasp_pose = batch["rgb"].to(device_id), batch["xyz"].to(device_id), batch["grasp_pose"].to(device_id)
         text_embedding = batch["text_embedding"].float().to(device_id)
         grasp_features = model(rgb, xyz, grasp_pose)
@@ -80,10 +81,10 @@ def main(config: DictConfig):
     device_id = rank % torch.cuda.device_count()
     config["train"]["distributed"]["world_size"] = world_size
 
+    out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    ckpt_dir = os.path.join(out_dir, "checkpoints")
     if rank == 0:
         print(OmegaConf.to_yaml(config))
-        out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-        ckpt_dir = os.path.join(out_dir, "checkpoints")
         os.makedirs(ckpt_dir, exist_ok=True)
 
         if "GANTRY_TASK_NAME" in os.environ:
@@ -176,7 +177,7 @@ def main(config: DictConfig):
                 info.update(gather_info(info_to_gather, world_size))
 
                 if test_loader is not None and config["train"]["test"]["period"] and step % config["train"]["test"]["period"] == 0:
-                    test_results = test(model, test_loader, device_id, world_size)
+                    test_results = test(model, test_loader, rank, world_size)
                     info["test"] = test_results
 
                 if rank == 0:

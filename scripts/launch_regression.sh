@@ -5,6 +5,7 @@ fi
 
 NAME=$1
 DATASET_NAME=dataset_0323_1529
+WORLD_SIZE=4
 
 OBS_DATASET=$(python -m semantic_grasping_datagen.get_data_for_dataset abhayd/${DATASET_NAME})
 if [ $? -ne 0 ]; then
@@ -16,7 +17,7 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --name $NAME \
     --task-name $NAME \
     --env-secret WANDB_API_KEY=WANDB_API_KEY \
-    --gpus 4 \
+    --gpus $WORLD_SIZE \
     --dataset abhayd/$DATASET_NAME:/dataset \
     --dataset $OBS_DATASET:/data \
     --priority normal \
@@ -28,4 +29,4 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --shared-memory 128GiB \
     --allow-dirty \
     -- \
-    python src/train_regression.py
+    torchrun --standalone --nnodes=1 --nproc_per_node=$WORLD_SIZE src/train_regression.py
