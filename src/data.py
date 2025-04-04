@@ -106,10 +106,6 @@ class GraspDescriptionRegressionDataset(Dataset):
 
         rgb, xyz, grasp_pose = load_obs(self.data_dir, row)
 
-        trf = np.eye(4)
-        trf[[1,2]] = -trf[[1,2]]
-        grasp_pose = trf @ grasp_pose
-
         xyz: torch.Tensor = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
         grasp_pose: torch.Tensor = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
@@ -232,10 +228,6 @@ class GraspDescriptionClassificationDataset(Dataset):
         row = self.data_df.iloc[obs_idx]
 
         rgb, xyz, grasp_pose = load_obs(self.data_dir, row)
-
-        trf = np.eye(4)
-        trf[[1,2]] = -trf[[1,2]]
-        grasp_pose = trf @ grasp_pose
 
         xyz = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
