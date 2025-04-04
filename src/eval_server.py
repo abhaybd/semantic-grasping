@@ -24,9 +24,10 @@ from semantic_grasping_datagen.datagen.datagen_utils import MeshLibrary, rejecti
 from semantic_grasping_datagen.datagen.datagen import DatagenConfig, noncolliding_annotations, sample_scene, generate_lighting, on_screen_annotations, visible_annotations
 
 from scorer import load_scorer, GraspClassificationScorer
+from utils import backproject
 
 SUPPORT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Table"], {"scale": 0.025})
-OBJECT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Mug", "Pan", "WineGlass"])
+OBJECT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Mug", "Pan", "WineGlass", "Teacup", "Bowl", "BeerBottle", "SodaCan", "Purse"])
 DATAGEN_CFG = DatagenConfig(n_views=0, n_objects_range=(5, 8), n_background_range=(1, 2), min_annots_per_view=20)
 
 scenes: dict[str, ss.Scene] = {}
@@ -34,7 +35,7 @@ lightings: dict[str, list[dict]] = {}
 scene_grasps: dict[str, np.ndarray] = {}
 scene_preds: dict[str, np.ndarray] = {}
 
-grasp_scorer = load_scorer("01JQ58NM5FHMC1SMERJQB2REPR", ckpt=None, map_location="cuda")
+grasp_scorer = load_scorer("01JQW5E267HTPPQFPJ2V23W8S3", ckpt=15000, map_location="cuda")
 
 print("Done loading models")
 
@@ -92,14 +93,6 @@ def set_camera(scene: pyrender.Scene, cam_K: np.ndarray, cam_pose: np.ndarray):
     for n in (scene.get_nodes(name=camera_light_node.name) or []):
         scene.remove_node(n)
     scene.add_node(camera_light_node)
-
-def backproject(cam_K: np.ndarray, depth: np.ndarray):
-    height, width = depth.shape
-    u, v = np.meshgrid(np.arange(width), np.arange(height), indexing="xy")
-    uvd = np.stack((u, v, np.ones_like(u)), axis=-1).astype(np.float32)
-    uvd *= np.expand_dims(depth, axis=-1)
-    xyz = uvd @ np.expand_dims(np.linalg.inv(cam_K).T, axis=0)
-    return xyz
 
 def render(scene: pyrender.Scene, cam_pose: np.ndarray, cam_K: np.ndarray):
     set_camera(scene, cam_K, cam_pose)

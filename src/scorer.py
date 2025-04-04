@@ -47,9 +47,8 @@ class GraspRegressionScorer(GraspScorer):
         rgb = rgb.unsqueeze(0)
         xyz = xyz.unsqueeze(0)
 
-        trf = np.eye(4)
-        trf[[1,2]] = -trf[[1,2]]
-        grasps = trf[None] @ grasps
+        print(f"Mean (untransformed) grasp pose: {np.mean(grasps[:, :3, 3], axis=0)}")
+
         grasps = torch.from_numpy(grasps).float().to(self.device)
 
         query_embedding = self.query_encoder.encode([query], is_query=False)[0]
@@ -64,6 +63,11 @@ class GraspRegressionScorer(GraspScorer):
                     grasp_embeddings.append(embedding.cpu().numpy())
         grasp_embeddings = np.concatenate(grasp_embeddings, axis=0)
         similarities = query_embedding @ grasp_embeddings.T
+
+        pairwise_similarities = grasp_embeddings @ grasp_embeddings.T
+        pairwise_similarities = pairwise_similarities[np.triu_indices(len(grasps), k=1)]
+        print(f"Average pairwise similarity: {np.mean(pairwise_similarities)}")
+
         return similarities
 
 class GraspClassificationScorer(GraspScorer):
