@@ -1,11 +1,13 @@
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 import os
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 import torchvision.transforms.v2 as T
+from torchvision.transforms.v2 import InterpolationMode
 from torchvision.transforms.v2 import functional as trfF
+from pytorch3d.structures import list_to_packed
 
 import pandas as pd
 import h5py
@@ -38,11 +40,12 @@ class ImageAugmentation:
 
         self.depth_erasing = T.RandomErasing(p=depth_mask_prob, scale=depth_mask_scale_range, ratio=depth_mask_ratio_range)
 
-    def __call__(self, rgb, xyz, grasp_pose):
+    def __call__(self, rgb: Image.Image, xyz: torch.Tensor, grasp_pose: torch.Tensor, normals: torch.Tensor):
         """
         rgb: PIL Image
         xyz: (3, H, W) torch.Tensor
         grasp_pose: (4, 4) torch.Tensor
+        normals: (3, H, W) torch.Tensor
         """
 
         # Random horizontal flip
@@ -50,6 +53,8 @@ class ImageAugmentation:
             rgb = trfF.horizontal_flip(rgb)
             xyz = torch.flip(xyz, dims=[-1])
             xyz[0] = -xyz[0]  # Flip x-coordinates
+            normals = torch.flip(normals, dims=[-1])
+            normals[0] = -normals[0]  # Flip x-coordinates
             # flip x position of grasp and reflect approach vector
             grasp_pose[0, 3] = -grasp_pose[0, 3]
             new_z = grasp_pose[:3, 2]
@@ -64,19 +69,22 @@ class ImageAugmentation:
             rgb = self.gray_scale(rgb)
 
         xyz = self.depth_erasing(xyz)
+        normals[:, xyz[2] == 0] = 0.0
 
         # Random flip grasp pose
         if torch.rand(1) < self.flip_grasp_prob:
             grasp_pose = grasp_pose @ self.flip_grasp_trf
 
-        return rgb, xyz, grasp_pose
+        return rgb, xyz, grasp_pose, normals
 
-def load_obs(data_dir: str, row) -> tuple[Image.Image, np.ndarray, np.ndarray]:
+def load_obs(data_dir: str, row) -> dict[str, Any]:
     with h5py.File(os.path.join(data_dir, row["scene_path"]), "r") as f:
-        rgb = Image.fromarray(f[row["rgb_key"]][:]).convert("RGB")
-        xyz = f[row["xyz_key"]][:]
-        grasp_pose = f[row["grasp_pose_key"]][:]
-    return rgb, xyz, grasp_pose
+        return {
+            'rgb': Image.fromarray(f[row["rgb_key"]][:]).convert("RGB"),
+            'xyz': f[row["xyz_key"]][:],
+            'normals': f[row["normals_key"]][:],
+            'grasp_pose': f[row["grasp_pose_key"]][:],
+        }
 
 class GraspDescriptionRegressionDataset(Dataset):
     def __init__(
@@ -85,6 +93,7 @@ class GraspDescriptionRegressionDataset(Dataset):
         data_dir: str,
         text_embedding_path: str,
         img_processor: Optional[Callable[[Image.Image], torch.Tensor]] = None,
+        pc_processor: Optional[Callable[[dict], torch.Tensor]] = None,
         augment: bool = True,
         augmentation_params: Optional[dict] = None,
         xyz_far_clip: float = 1.0,
@@ -93,6 +102,7 @@ class GraspDescriptionRegressionDataset(Dataset):
         self.data_df = pd.read_csv(csv_path)
         self.text_embeddings = np.load(text_embedding_path)
         self.xyz_far_clip = xyz_far_clip
+        self.pc_processor = pc_processor
         aug_params = augmentation_params or {}
         self.transform = ImageAugmentation(**aug_params) if augment else None
         if img_processor is not None:
@@ -114,29 +124,76 @@ class GraspDescriptionRegressionDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data_df.iloc[idx]
 
-        rgb, xyz, grasp_pose = load_obs(self.data_dir, row)
+        obs = load_obs(self.data_dir, row)
+        rgb: Image.Image = obs['rgb']
+        xyz: np.ndarray = obs['xyz']
+        normals: np.ndarray = obs['normals']
+        grasp_pose: np.ndarray = obs['grasp_pose']
 
         xyz: torch.Tensor = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
+        normals: torch.Tensor = torch.from_numpy(normals).float().permute(2, 0, 1)  # (3, H, W)
         grasp_pose: torch.Tensor = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
 
-        xyz[:, xyz[2] >= self.xyz_far_clip] = 0.0
+        far_clip_mask = xyz[2] >= self.xyz_far_clip
+        xyz[:, far_clip_mask] = 0.0
+        normals[:, far_clip_mask] = 0.0
 
         if self.transform is not None:
-            rgb, xyz, grasp_pose = self.transform(rgb, xyz, grasp_pose)
+            rgb, xyz, grasp_pose, normals = self.transform(rgb, xyz, grasp_pose, normals)
 
         rgb = self.img_processor(rgb)
 
         if rgb.shape[-2:] != xyz.shape[-2:]:
-            xyz = trfF.resize(xyz, rgb.shape[-2:])
+            xyz = trfF.resize(xyz, rgb.shape[-2:], interpolation=InterpolationMode.NEAREST_EXACT)
+            normals = trfF.resize(normals, rgb.shape[-2:], interpolation=InterpolationMode.NEAREST_EXACT)
+
+        valid_mask = xyz[2] > 0.0
+        points = xyz[:, valid_mask]
+        colors = rgb[:, valid_mask]
+        normals = normals[:, valid_mask]
+        xyz_idxs = torch.nonzero(valid_mask)
+
+        pc_inputs = {
+            "coord": points,
+            "color": colors,
+            "normal": normals,
+        }
+        if self.pc_processor is not None:
+            pc_inputs = self.pc_processor(pc_inputs)
+        else:
+            pc_inputs["coord"] -= pc_inputs["coord"].mean(dim=0, keepdim=True)
 
         return {
             'annotation_id': row['annotation_id'],
             'text_embedding': self.text_embeddings[idx],
             'rgb': rgb,
-            'xyz': xyz,
-            'grasp_pose': grasp_pose
+            'grasp_pose': grasp_pose,
+            'xyz_inputs': {
+                'xyz': xyz,
+                'valid_mask': valid_mask,
+                **pc_inputs,
+            }
         }
+
+    def collate_fn(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
+        ret = {
+            "annotation_id": [b["annotation_id"] for b in batch],
+            "text_embedding": torch.stack([torch.as_tensor(b["text_embedding"]) for b in batch]),
+            "rgb": torch.stack([torch.as_tensor(b["rgb"]) for b in batch]),
+            "grasp_pose": torch.stack([torch.as_tensor(b["grasp_pose"]) for b in batch]),
+            "xyz_inputs": {
+                "xyz": torch.stack([torch.as_tensor(b["xyz_inputs"]["xyz"]) for b in batch]),
+                "valid_mask": torch.stack([torch.as_tensor(b["xyz_inputs"]["valid_mask"]) for b in batch]),
+            },
+        }
+
+        xyz_keys = set(batch[0]["xyz_inputs"].keys()) - set(ret["xyz_inputs"].keys())
+        for k in xyz_keys:
+            packed, _, _, batch = list_to_packed([b["xyz_inputs"][k] for b in batch])
+            ret["xyz_inputs"][k] = packed
+        ret["xyz_inputs"]["batch"] = batch
+        return ret
 
 class GraspDescriptionClassificationDataset(Dataset):
     def __init__(
@@ -239,11 +296,20 @@ class GraspDescriptionClassificationDataset(Dataset):
         annot_idx, obs_idx = divmod(idx, len(self.data_df))
         row = self.data_df.iloc[obs_idx]
 
-        rgb, xyz, grasp_pose = load_obs(self.data_dir, row)
+        obs = load_obs(self.data_dir, row)
+        rgb: Image.Image = obs['rgb']
+        xyz: np.ndarray = obs['xyz']
+        grasp_pose: np.ndarray = obs['grasp_pose']
+        normals: np.ndarray = obs['normals']
 
         xyz = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
+        normals = torch.from_numpy(normals).float().permute(2, 0, 1)  # (3, H, W)
         grasp_pose = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
+
+        far_clip_mask = xyz[2] >= self.xyz_far_clip
+        xyz[:, far_clip_mask] = 0.0
+        normals[:, far_clip_mask] = 0.0
 
         if self.text_embeddings is not None:
             text_embedding = self.text_embeddings[obs_idx]
@@ -259,7 +325,7 @@ class GraspDescriptionClassificationDataset(Dataset):
             }
 
         if self.transform is not None:
-            rgb, xyz, grasp_pose = self.transform(rgb, xyz, grasp_pose)
+            rgb, xyz, grasp_pose, normals = self.transform(rgb, xyz, grasp_pose, normals)
 
         rgb = self.img_processor(rgb)
 
@@ -268,6 +334,7 @@ class GraspDescriptionClassificationDataset(Dataset):
 
         label = torch.tensor([1 if self.obs_to_annot_id[obs_idx] == annot_idx else 0]).float()
 
+        # TODO: return normals
         return {
             "rgb": rgb,
             "xyz": xyz,

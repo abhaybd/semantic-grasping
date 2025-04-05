@@ -69,6 +69,16 @@ def build_wandb_config(config: DictConfig):
     }
     return wandb_config
 
+def create_dataloader(dataset: GraspDescriptionRegressionDataset, rank: int, world_size: int, config: DictConfig):
+    loader_kwargs = {
+        "persistent_workers": True,
+        "pin_memory": True,
+        "batch_size": safe_div(config["train"]["dataloader"]["batch_size"], world_size),
+        "num_workers": safe_div(config["train"]["dataloader"]["num_workers"], world_size),
+    }
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
+    return DataLoader(dataset, sampler=sampler, collate_fn=dataset.collate_fn, **loader_kwargs)
+
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
     if missing_keys := OmegaConf.missing_keys(config):
@@ -119,22 +129,13 @@ def main(config: DictConfig):
     img_processor = grasp_encoder.create_rgb_processor()
     dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
     test_frac = config["train"]["test"]["frac"]
-    loader_kwargs = {
-        "persistent_workers": True,
-        "pin_memory": True,
-        "batch_size": safe_div(config["train"]["dataloader"]["batch_size"], world_size),
-        "num_workers": safe_div(config["train"]["dataloader"]["num_workers"], world_size),
-    }
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
         train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
-        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-        test_sampler = DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
-        train_loader = DataLoader(train_dataset, sampler=train_sampler, **loader_kwargs)
-        test_loader = DataLoader(test_dataset, sampler=test_sampler, **loader_kwargs)
+        train_loader = create_dataloader(train_dataset, rank, world_size, config)
+        test_loader = create_dataloader(test_dataset, rank, world_size, config)
     else:
-        train_sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-        train_loader = DataLoader(dataset, sampler=train_sampler, **loader_kwargs)
+        train_loader = create_dataloader(dataset, rank, world_size, config)
         test_loader = None
 
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
@@ -154,11 +155,12 @@ def main(config: DictConfig):
         while step < config["train"]["steps"]:
             for batch in train_loader:
                 optimizer.zero_grad()
-                rgb, xyz, grasp_pose = batch["rgb"].to(device_id), batch["xyz"].to(device_id), batch["grasp_pose"].to(device_id)
+                rgb, grasp_pose = batch["rgb"].to(device_id), batch["grasp_pose"].to(device_id)
+                xyz_inputs = {k: v.to(device_id) for k, v in batch["xyz_inputs"].items()}
                 text_embedding = batch["text_embedding"].to(device_id)
 
                 infer_start = time.perf_counter()
-                grasp_features = model(rgb, xyz, grasp_pose)
+                grasp_features = model(rgb, xyz_inputs, grasp_pose)
                 infer_end = time.perf_counter()
                 infer_time = infer_end - infer_start
 
