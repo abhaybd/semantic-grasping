@@ -112,6 +112,10 @@ def main(config: DictConfig):
     model = DDP(grasp_encoder, device_ids=[device_id], find_unused_parameters=True)
     model.train()
 
+    if rank == 0:
+        print(f"# trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+        print(f"# parameters: {sum(p.numel() for p in model.parameters()):,}")
+
     img_processor = grasp_encoder.create_rgb_processor()
     dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
     test_frac = config["train"]["test"]["frac"]
