@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torch.utils.data import Dataset, Sampler
 import torchvision.transforms.v2 as T
 from torchvision.transforms.v2 import functional as trfF
 
@@ -14,12 +14,16 @@ from scipy.spatial.transform import Rotation as R
 
 
 class ImageAugmentation:
-    def __init__(self,
-                 color_jitter_prob=0.8,
-                 gray_scale_prob=0.2,
-                 horizontal_flip_prob=0.5,
-                 flip_grasp_prob=0.5):
-
+    def __init__(
+        self,
+        color_jitter_prob=0.8,
+        gray_scale_prob=0.2,
+        horizontal_flip_prob=0.5,
+        flip_grasp_prob=0.5,
+        depth_mask_prob=0.5,
+        depth_mask_scale_range=(0.02, 0.2),
+        depth_mask_ratio_range=(0.5, 2.0),
+    ):
         self.color_jitter_prob = color_jitter_prob
         self.gray_scale_prob = gray_scale_prob
         self.horizontal_flip_prob = horizontal_flip_prob
@@ -31,6 +35,8 @@ class ImageAugmentation:
         # Color augmentation
         self.color_jitter = T.ColorJitter(0.4, 0.4, 0.4, 0.1)
         self.gray_scale = T.Grayscale(num_output_channels=3)
+
+        self.depth_erasing = T.RandomErasing(p=depth_mask_prob, scale=depth_mask_scale_range, ratio=depth_mask_ratio_range)
 
     def __call__(self, rgb, xyz, grasp_pose):
         """
@@ -57,6 +63,8 @@ class ImageAugmentation:
         if torch.rand(1) < self.gray_scale_prob:
             rgb = self.gray_scale(rgb)
 
+        xyz = self.depth_erasing(xyz)
+
         # Random flip grasp pose
         if torch.rand(1) < self.flip_grasp_prob:
             grasp_pose = grasp_pose @ self.flip_grasp_trf
@@ -78,11 +86,13 @@ class GraspDescriptionRegressionDataset(Dataset):
         text_embedding_path: str,
         img_processor: Optional[Callable[[Image.Image], torch.Tensor]] = None,
         augment: bool = True,
-        augmentation_params: Optional[dict] = None
+        augmentation_params: Optional[dict] = None,
+        xyz_far_clip: float = 1.0,
     ):
         self.data_dir = data_dir
         self.data_df = pd.read_csv(csv_path)
         self.text_embeddings = np.load(text_embedding_path)
+        self.xyz_far_clip = xyz_far_clip
         aug_params = augmentation_params or {}
         self.transform = ImageAugmentation(**aug_params) if augment else None
         if img_processor is not None:
@@ -109,6 +119,8 @@ class GraspDescriptionRegressionDataset(Dataset):
         xyz: torch.Tensor = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
         grasp_pose: torch.Tensor = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
+
+        xyz[:, xyz[2] >= self.xyz_far_clip] = 0.0
 
         if self.transform is not None:
             rgb, xyz, grasp_pose = self.transform(rgb, xyz, grasp_pose)

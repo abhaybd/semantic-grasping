@@ -17,10 +17,10 @@ import torch.distributed as dist
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
-from tqdm import tqdm
 
 from model import GraspEncoder, Checkpointer, WarmupCosineLR
 from data import GraspDescriptionRegressionDataset
+from utils import tqdm
 
 @torch.no_grad()
 def test(model: nn.Module, test_loader: DataLoader, rank: int, world_size: int):

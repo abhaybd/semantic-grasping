@@ -12,11 +12,11 @@ from torch.utils.data import DataLoader
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
-from tqdm import tqdm
 from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision
 
 from model import GraspClassifier, Checkpointer, WarmupCosineLR
 from data import GraspDescriptionClassificationDataset, GraspDescriptionClassificationSampler
+from utils import tqdm
 
 @torch.no_grad()
 @torch.autocast("cuda", dtype=torch.bfloat16)

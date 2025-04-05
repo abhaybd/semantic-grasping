@@ -34,9 +34,13 @@ train:
       gray_scale_prob: 0.1
       horizontal_flip_prob: 0.5
       flip_grasp_prob: 0.5
+      depth_mask_prob: 0.5
+      depth_mask_scale_range: [0.02, 0.2]
+      depth_mask_ratio_range: [0.5, 2.0]
     data_dir: /data/observations
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
+    xyz_far_clip: 1.0  # meters
   optimizer:
     lr: 0.00005
     weight_decay: 0.0
