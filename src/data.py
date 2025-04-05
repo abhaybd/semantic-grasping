@@ -7,7 +7,6 @@ from torch.utils.data import Dataset, Sampler
 import torchvision.transforms.v2 as T
 from torchvision.transforms.v2 import InterpolationMode
 from torchvision.transforms.v2 import functional as trfF
-from pytorch3d.structures import list_to_packed
 
 import pandas as pd
 import h5py
@@ -129,6 +128,7 @@ class GraspDescriptionRegressionDataset(Dataset):
         xyz: np.ndarray = obs['xyz']
         normals: np.ndarray = obs['normals']
         grasp_pose: np.ndarray = obs['grasp_pose']
+        rgb_array = torch.from_numpy(np.array(rgb)).float().permute(2, 0, 1)
 
         xyz: torch.Tensor = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
@@ -147,22 +147,16 @@ class GraspDescriptionRegressionDataset(Dataset):
         if rgb.shape[-2:] != xyz.shape[-2:]:
             xyz = trfF.resize(xyz, rgb.shape[-2:], interpolation=InterpolationMode.NEAREST_EXACT)
             normals = trfF.resize(normals, rgb.shape[-2:], interpolation=InterpolationMode.NEAREST_EXACT)
+        if rgb.shape[-2:] != rgb_array.shape[-2:]:
+            rgb_array = trfF.resize(rgb_array, rgb.shape[-2:])
 
-        valid_mask = xyz[2] > 0.0
-        points = xyz[:, valid_mask]
-        colors = rgb[:, valid_mask]
-        normals = normals[:, valid_mask]
-        xyz_idxs = torch.nonzero(valid_mask)
+        valid_mask = xyz[2] > 0.0  # (H, W)
 
         pc_inputs = {
-            "coord": points,
-            "color": colors,
-            "normal": normals,
+            "coord": xyz[:, valid_mask].T,  # (*, 3)
+            "color": rgb_array[:, valid_mask].T,  # (*, 3)
+            "normal": normals[:, valid_mask].T,  # (*, 3)
         }
-        if self.pc_processor is not None:
-            pc_inputs = self.pc_processor(pc_inputs)
-        else:
-            pc_inputs["coord"] -= pc_inputs["coord"].mean(dim=0, keepdim=True)
 
         return {
             'annotation_id': row['annotation_id'],
@@ -188,11 +182,16 @@ class GraspDescriptionRegressionDataset(Dataset):
             },
         }
 
-        xyz_keys = set(batch[0]["xyz_inputs"].keys()) - set(ret["xyz_inputs"].keys())
-        for k in xyz_keys:
-            packed, _, _, batch = list_to_packed([b["xyz_inputs"][k] for b in batch])
-            ret["xyz_inputs"][k] = packed
-        ret["xyz_inputs"]["batch"] = batch
+        point = {
+            "coord": torch.cat([torch.as_tensor(b["xyz_inputs"]["coord"]) for b in batch]).numpy(),
+            "color": torch.cat([torch.as_tensor(b["xyz_inputs"]["color"]) for b in batch]).numpy(),
+            "normal": torch.cat([torch.as_tensor(b["xyz_inputs"]["normal"]) for b in batch]).numpy(),
+            "batch": np.concatenate([[i] * len(b["xyz_inputs"]["coord"]) for i, b in enumerate(batch)]),
+        }
+        if self.pc_processor is not None:
+            point = self.pc_processor(point)
+        ret["xyz_inputs"].update(point)
+
         return ret
 
 class GraspDescriptionClassificationDataset(Dataset):
@@ -366,20 +365,3 @@ class GraspDescriptionClassificationSampler(Sampler):
         np.random.shuffle(idxs)
 
         return iter(idxs)
-
-
-if __name__ == "__main__":
-    from model import GraspClassifier
-    import yaml
-    with open("config/classification.yaml", "r") as f:
-        config = yaml.safe_load(f)
-    gc = GraspClassifier(config["model"])
-    dataset = GraspDescriptionClassificationDataset(
-        csv_path="/train_data/dataset/dataset.csv",
-        data_dir="/train_data/data",
-        img_processor=gc.create_rgb_processor(),
-        text_processor=gc.create_text_processor(),
-        augment=False
-    )
-    for i in range(len(dataset)):
-        sample = dataset[i]
