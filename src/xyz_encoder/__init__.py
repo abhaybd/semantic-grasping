@@ -1,8 +1,18 @@
-from typing import Any
+from typing import Any, Protocol, Callable
+
+import torch
 
 from .vit import ViTEncoder
 
-def create_xyz_encoder(**config: Any):
+class XYZEncoder(Protocol, torch.nn.Module):
+    def create_processor(self) -> Callable[[Any], torch.Tensor] | None:
+        ...
+
+    @property
+    def embed_dim(self) -> int:
+        ...
+
+def create_xyz_encoder(**config: Any) -> XYZEncoder:
     if "type" in config:
         enc_type = config["type"]
         config = config.copy()

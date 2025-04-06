@@ -190,6 +190,8 @@ class GraspDescriptionRegressionDataset(Dataset):
         }
         if self.pc_processor is not None:
             point = self.pc_processor(point)
+        else:
+            point = {k: torch.from_numpy(v).float() for k, v in point.items()}
         ret["xyz_inputs"].update(point)
 
         return ret

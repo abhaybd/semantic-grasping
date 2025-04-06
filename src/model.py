@@ -333,6 +333,9 @@ class GraspEncoder(Model):
     def create_rgb_processor(self):
         return self.feature_extractor.create_processor()
 
+    def create_xyz_processor(self):
+        return self.xyz_feature_extractor.create_processor()
+
     def forward(self, rgbs: torch.Tensor, xyz_inputs: dict[str, torch.Tensor], grasp_poses: torch.Tensor):
         """
         Expects (B, 3, H, W) rgbs, (B, 3, H, W) xyzs, (B, 4, 4) grasp_poses

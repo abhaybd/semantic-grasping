@@ -18,6 +18,9 @@ class ViTEncoder(torch.nn.Module):
         x = x[:, 1:]  # Remove the class token
         return x
 
+    def create_processor(self):
+        return None
+
     @property
     def embed_dim(self):
         return self.model.hidden_dim
