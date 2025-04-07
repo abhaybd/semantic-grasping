@@ -4,12 +4,15 @@ import torch
 
 from .vit import ViTEncoder
 
-class XYZEncoder(Protocol, torch.nn.Module):
+class XYZEncoder(Protocol):
     def create_processor(self) -> Callable[[Any], torch.Tensor] | None:
         ...
 
     @property
     def embed_dim(self) -> int:
+        ...
+
+    def forward(self, **kwargs: Any) -> torch.Tensor:
         ...
 
 def create_xyz_encoder(**config: Any) -> XYZEncoder:
