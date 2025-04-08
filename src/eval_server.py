@@ -28,14 +28,14 @@ from utils import backproject
 
 SUPPORT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Table"], {"scale": 0.025})
 OBJECT_LIBRARY = MeshLibrary.from_categories("../acronym/data", ["Mug", "Pan", "WineGlass", "Teacup", "Bowl", "BeerBottle", "SodaCan", "Purse"])
-DATAGEN_CFG = DatagenConfig(n_views=0, n_objects_range=(5, 8), n_background_range=(1, 2), min_annots_per_view=20)
+DATAGEN_CFG = DatagenConfig(n_views=0, n_objects_range=(5, 8), n_background_range=(1, 2), min_annots_per_view=20, max_grasp_dist=1.0)
 
 scenes: dict[str, ss.Scene] = {}
 lightings: dict[str, list[dict]] = {}
 scene_grasps: dict[str, np.ndarray] = {}
 scene_preds: dict[str, np.ndarray] = {}
 
-grasp_scorer = load_scorer("01JQW5E267HTPPQFPJ2V23W8S3", ckpt=15000, map_location="cuda")
+grasp_scorer = load_scorer("01JR1NJDDX57715D0GVN061C5W", ckpt=42500, map_location="cuda")
 
 print("Done loading models")
 
@@ -206,6 +206,15 @@ async def predict(scene_id: str, body: dict):
     cam_pose = np.eye(4)
     cam_pose[:3, :3] = R.from_quat(cam_quat).as_matrix()
     cam_pose[:3, 3] = cam_pos
+
+    standard_to_trimesh_cam_trf = np.array([
+        [1, 0, 0, 0],
+        [0, -1, 0, 0],
+        [0, 0, -1, 0],
+        [0, 0, 0, 1]
+    ])
+    cam_pose_standard = cam_pose @ standard_to_trimesh_cam_trf
+
     vfov, cx, cy = np.array(body["cam_params"])
     fx = fy = cy / np.tan(np.radians(vfov/2))
     cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
@@ -216,13 +225,13 @@ async def predict(scene_id: str, body: dict):
     n_grasps = len(grasps)
     grasp_idxs = get_grasp_idxs_in_view(scenes[scene_id], cam_K, cam_pose, grasps)
     grasps = grasps[grasp_idxs]
-    grasps = np.linalg.inv(cam_pose)[None] @ grasps
+    grasps = np.linalg.inv(cam_pose_standard)[None] @ grasps
 
     print("Rendering")
     image, xyz = render(scene, cam_pose, cam_K)
     print("Done rendering")
     image.save("image.png")
-    similarities = grasp_scorer.score_grasps(cam_pose, image, xyz, grasps, query)
+    similarities = grasp_scorer.score_grasps(cam_pose_standard, image, xyz, grasps, query)
     all_similarities = np.full(n_grasps, np.nan)
     all_similarities[grasp_idxs] = similarities
     scene_preds[scene_id] = all_similarities

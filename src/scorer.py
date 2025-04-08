@@ -9,6 +9,8 @@ from torchvision.transforms.v2.functional import resize
 from semantic_grasping_datagen.grasp_desc_encoder import GraspDescriptionEncoder
 from model import GraspEncoder, GraspClassifier
 
+FAR_CLIP = 1.0
+
 class GraspScorer(ABC):
     @abstractmethod
     def score_grasps(self, cam_pose: np.ndarray, rgb: Image.Image, xyz: np.ndarray, grasps: np.ndarray, query: str) -> np.ndarray:
@@ -32,6 +34,7 @@ class GraspRegressionScorer(GraspScorer):
         self.query_device = query_device
 
         self.rgb_processor = self.grasp_encoder.create_rgb_processor()
+        self.pc_processor = self.grasp_encoder.create_xyz_processor()
 
     def to(self, device: torch.device):
         self.device = device
@@ -39,6 +42,8 @@ class GraspRegressionScorer(GraspScorer):
 
     def score_grasps(self, cam_pose: np.ndarray, rgb: Image.Image, xyz: np.ndarray, grasps: np.ndarray, query: str) -> np.ndarray:
         rgb = self.rgb_processor(rgb).to(self.device)
+        clip_mask = xyz[..., 2] > FAR_CLIP
+        xyz[clip_mask, :] = 0.0
         xyz = torch.from_numpy(xyz).float().permute(2, 0, 1).to(self.device)
 
         if rgb.shape[-2:] != xyz.shape[-2:]:
@@ -46,6 +51,9 @@ class GraspRegressionScorer(GraspScorer):
 
         rgb = rgb.unsqueeze(0)
         xyz = xyz.unsqueeze(0)
+        xyz_inputs = {
+            "xyz": xyz,
+        }
 
         print(f"Mean (untransformed) grasp pose: {np.mean(grasps[:, :3, 3], axis=0)}")
 
@@ -59,7 +67,7 @@ class GraspRegressionScorer(GraspScorer):
                 for i in range(0, len(grasps), batch_size):
                     print(f"Processing batch {i//batch_size + 1} of {math.ceil(len(grasps)/batch_size)}")
                     grasps_batch = grasps[i:i+batch_size]
-                    embedding = self.grasp_encoder(rgb, xyz, grasps_batch)
+                    embedding = self.grasp_encoder(rgb, xyz_inputs, grasps_batch)
                     grasp_embeddings.append(embedding.cpu().numpy())
         grasp_embeddings = np.concatenate(grasp_embeddings, axis=0)
         similarities = query_embedding @ grasp_embeddings.T
