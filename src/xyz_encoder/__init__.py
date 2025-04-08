@@ -3,6 +3,7 @@ from typing import Any, Protocol, Callable
 import torch
 
 from .vit import ViTEncoder
+from .fb_sonata import SonataEncoder
 
 class XYZEncoder(Protocol):
     def create_processor(self) -> Callable[[Any], torch.Tensor] | None:
@@ -26,5 +27,7 @@ def create_xyz_encoder(**config: Any) -> XYZEncoder:
     match enc_type:
         case "vit":
             return ViTEncoder(**config)
+        case "sonata":
+            return SonataEncoder(**config)
         case _:
             raise ValueError(f"Unknown xyz encoder type: {enc_type}")
