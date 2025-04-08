@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import torch
@@ -94,6 +94,18 @@ def create_dataloader(dataset: GraspDescriptionRegressionDataset, collate_fn, ra
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     return DataLoader(dataset, sampler=sampler, collate_fn=collate_fn, **loader_kwargs)
 
+def time_iter(iterable: Iterable[Any]):
+    it = iter(iterable)
+    while True:
+        start = time.perf_counter()
+        try:
+            item = next(it)
+        except StopIteration:
+            break
+        end = time.perf_counter()
+        yield end - start, item
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
     if missing_keys := OmegaConf.missing_keys(config):
@@ -170,7 +182,7 @@ def main(config: DictConfig):
     step = start_step
     with tqdm(total=config["train"]["steps"], initial=start_step, desc="Training", disable=rank != 0) as pbar:
         while step < config["train"]["steps"]:
-            for batch in train_loader:
+            for batch_load_time, batch in time_iter(train_loader):
                 optimizer.zero_grad()
                 batch = move_to_device(batch, device_id)
                 rgb, grasp_pose = batch["rgb"], batch["grasp_pose"]
@@ -197,6 +209,7 @@ def main(config: DictConfig):
                     "loss": loss.item(),
                     "variance": variance,
                     "infer_time": infer_time,
+                    "batch_load_time": batch_load_time,
                 }
                 info.update(gather_info(info_to_gather, world_size))
 
