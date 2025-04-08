@@ -336,7 +336,7 @@ class GraspEncoder(Model):
     def create_xyz_processor(self):
         return self.xyz_feature_extractor.create_processor()
 
-    def forward(self, rgbs: torch.Tensor, xyz_inputs: dict[str, torch.Tensor], grasp_poses: torch.Tensor):
+    def forward(self, rgbs: torch.Tensor, xyz: torch.Tensor, grasp_poses: torch.Tensor):
         """
         Expects (B, 3, H, W) rgbs, (B, 3, H, W) xyzs, (B, 4, 4) grasp_poses
         Returns (B, embed_dim) grasp_features
@@ -344,7 +344,7 @@ class GraspEncoder(Model):
         patch_features = self.feature_extractor(rgbs)  # (B, n_patches, siglip_dim)
         patch_features = self.feature_encoder(patch_features)  # (B, n_patches, hidden_dim)
 
-        xyz_features = self.xyz_feature_extractor(**xyz_inputs)  # (B, n_patches, xyz_feature_dim)
+        xyz_features = self.xyz_feature_extractor(xyz)  # (B, n_patches, xyz_feature_dim)
         xyz_features = self.xyz_feature_encoder(xyz_features)  # (B, n_patches, hidden_dim)
 
         assert len(patch_features) == len(xyz_features)

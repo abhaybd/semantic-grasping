@@ -6,7 +6,7 @@ class ViTEncoder(torch.nn.Module):
         super().__init__()
         self.model = VisionTransformer(**kwargs)
 
-    def forward(self, xyz: torch.Tensor, **kwargs):
+    def forward(self, xyz: torch.Tensor):
         """
         Expects (B, 3, H, W) input, returns (B, n_patches, hidden_dim) features
         """
@@ -17,9 +17,6 @@ class ViTEncoder(torch.nn.Module):
         x = self.model.encoder(x)
         x = x[:, 1:]  # Remove the class token
         return x
-
-    def create_processor(self):
-        return None
 
     @property
     def embed_dim(self):

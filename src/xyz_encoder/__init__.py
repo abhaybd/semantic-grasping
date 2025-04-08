@@ -1,18 +1,15 @@
-from typing import Any, Protocol, Callable
+from typing import Any, Protocol
 
 import torch
 
 from .vit import ViTEncoder
 
 class XYZEncoder(Protocol):
-    def create_processor(self) -> Callable[[Any], torch.Tensor] | None:
-        ...
-
     @property
     def embed_dim(self) -> int:
         ...
 
-    def forward(self, **kwargs: Any) -> torch.Tensor:
+    def forward(self, xyz: torch.Tensor) -> torch.Tensor:
         ...
 
 def create_xyz_encoder(**config: Any) -> XYZEncoder:

@@ -51,9 +51,6 @@ class GraspRegressionScorer(GraspScorer):
 
         rgb = rgb.unsqueeze(0)
         xyz = xyz.unsqueeze(0)
-        xyz_inputs = {
-            "xyz": xyz,
-        }
 
         print(f"Mean (untransformed) grasp pose: {np.mean(grasps[:, :3, 3], axis=0)}")
 
@@ -67,7 +64,7 @@ class GraspRegressionScorer(GraspScorer):
                 for i in range(0, len(grasps), batch_size):
                     print(f"Processing batch {i//batch_size + 1} of {math.ceil(len(grasps)/batch_size)}")
                     grasps_batch = grasps[i:i+batch_size]
-                    embedding = self.grasp_encoder(rgb, xyz_inputs, grasps_batch)
+                    embedding = self.grasp_encoder(rgb, xyz, grasps_batch)
                     grasp_embeddings.append(embedding.cpu().numpy())
         grasp_embeddings = np.concatenate(grasp_embeddings, axis=0)
         similarities = query_embedding @ grasp_embeddings.T

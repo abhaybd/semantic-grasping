@@ -41,11 +41,10 @@ def test(model: nn.Module, test_loader: DataLoader, rank: int, world_size: int):
     device_id = rank % torch.cuda.device_count()
     for batch in tqdm(test_loader, desc="Test", leave=False, disable=rank != 0):
         batch = move_to_device(batch, device_id)
-        rgb, grasp_pose = batch["rgb"], batch["grasp_pose"]
-        xyz_inputs = batch["xyz_inputs"]
+        rgb, xyz, grasp_pose = batch["rgb"], batch["xyz"], batch["grasp_pose"]
         text_embedding = batch["text_embedding"]
 
-        grasp_features = model(rgb, xyz_inputs, grasp_pose)
+        grasp_features = model(rgb, xyz, grasp_pose)
 
         batch_loss = 1.0 - F.cosine_similarity(grasp_features, text_embedding, dim=-1)
         losses.extend(batch_loss.tolist())
@@ -84,7 +83,7 @@ def build_wandb_config(config: DictConfig):
     }
     return wandb_config
 
-def create_dataloader(dataset: GraspDescriptionRegressionDataset, collate_fn, rank: int, world_size: int, config: DictConfig):
+def create_dataloader(dataset: GraspDescriptionRegressionDataset, rank: int, world_size: int, config: DictConfig):
     loader_kwargs = {
         "persistent_workers": True,
         "pin_memory": True,
@@ -92,7 +91,7 @@ def create_dataloader(dataset: GraspDescriptionRegressionDataset, collate_fn, ra
         "num_workers": safe_div(config["train"]["dataloader"]["num_workers"], world_size),
     }
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    return DataLoader(dataset, sampler=sampler, collate_fn=collate_fn, **loader_kwargs)
+    return DataLoader(dataset, sampler=sampler, **loader_kwargs)
 
 def time_iter(iterable: Iterable[Any]):
     it = iter(iterable)
@@ -154,17 +153,15 @@ def main(config: DictConfig):
         print(f"Num parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     img_processor = grasp_encoder.create_rgb_processor()
-    pc_processor = grasp_encoder.create_xyz_processor()
-    dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor, pc_processor=pc_processor)
-    collate_fn = dataset.collate_fn
+    dataset = GraspDescriptionRegressionDataset(**config["train"]["dataset"], img_processor=img_processor)
     test_frac = config["train"]["test"]["frac"]
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
         train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
-        train_loader = create_dataloader(train_dataset, collate_fn, rank, world_size, config)
-        test_loader = create_dataloader(test_dataset, collate_fn, rank, world_size, config)
+        train_loader = create_dataloader(train_dataset, rank, world_size, config)
+        test_loader = create_dataloader(test_dataset, rank, world_size, config)
     else:
-        train_loader = create_dataloader(dataset, collate_fn, rank, world_size, config)
+        train_loader = create_dataloader(dataset, rank, world_size, config)
         test_loader = None
 
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])
@@ -185,12 +182,11 @@ def main(config: DictConfig):
             for batch_load_time, batch in time_iter(train_loader):
                 optimizer.zero_grad()
                 batch = move_to_device(batch, device_id)
-                rgb, grasp_pose = batch["rgb"], batch["grasp_pose"]
-                xyz_inputs = batch["xyz_inputs"]
+                rgb, xyz, grasp_pose = batch["rgb"], batch["xyz"], batch["grasp_pose"]
                 text_embedding = batch["text_embedding"]
 
                 infer_start = time.perf_counter()
-                grasp_features = model(rgb, xyz_inputs, grasp_pose)
+                grasp_features = model(rgb, xyz, grasp_pose)
                 infer_end = time.perf_counter()
                 infer_time = infer_end - infer_start
 
