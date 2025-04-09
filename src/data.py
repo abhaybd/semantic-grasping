@@ -152,14 +152,16 @@ class GraspDescriptionClassificationDataset(Dataset):
         data_dir: str,
         img_processor: Callable[[Image.Image], torch.Tensor],
         text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
-        text_embeddings_path: Optional[str] = None,
+        text_embedding_path: Optional[str] = None,
         use_frozen_text_embeddings: bool = False,
         augment: bool = True,
-        augmentation_params: Optional[dict] = None
+        augmentation_params: Optional[dict] = None,
+        xyz_far_clip: float = 1.0,
     ):
         self.data_df = pd.read_csv(csv_path)
         self.data_dir = data_dir
-        self.text_embeddings = np.load(text_embeddings_path) if text_embeddings_path and use_frozen_text_embeddings else None
+        self.xyz_far_clip = xyz_far_clip
+        self.text_embeddings = np.load(text_embedding_path) if text_embedding_path and use_frozen_text_embeddings else None
         aug_params = augmentation_params or {}
         self.transform = ImageAugmentation(**aug_params) if augment else None
         self.img_processor = img_processor
@@ -184,12 +186,12 @@ class GraspDescriptionClassificationDataset(Dataset):
         xyz[:, far_clip_mask] = 0.0
 
         if self.text_embeddings is not None:
-            text_embedding = self.text_embeddings[obs_idx]
+            text_embedding = self.text_embeddings[idx]
             text_inputs = {
                 "text_embedding": text_embedding,
             }
         else:
-            annotation = self.unique_annots[annot_idx]
+            annotation = row["annot"]
             text_input_ids, text_attention_mask = self.text_processor(annotation)
             text_inputs = {
                 "input_ids": text_input_ids,

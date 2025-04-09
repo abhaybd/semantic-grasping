@@ -84,7 +84,7 @@ def construct_contrastive_batch(batch: dict[str, Any]) -> tuple[dict[str, Any], 
         "text_inputs": {k: torch.cat([batch["text_inputs"][k], nonmatching_text_inputs[k]]) for k in batch["text_inputs"]}
     }
 
-    labels = torch.cat([torch.ones(batch_size), torch.zeros(batch_size)])
+    labels = torch.cat([torch.ones(batch_size), torch.zeros(batch_size)]).reshape(-1, 1).to(batch["rgb"].device)
 
     return contrastive_batch, labels
 
