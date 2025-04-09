@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 from torch.utils.data import random_split
 
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 
 import hydra
@@ -20,18 +19,8 @@ import wandb
 
 from model import GraspEncoder, Checkpointer, WarmupCosineLR
 from data import GraspDescriptionRegressionDataset
-from utils import tqdm
+from utils import tqdm, gather_info, create_dist_dataloader, time_iter, nested_dict_to_flat_dict, build_wandb_config, move_to_device
 
-def move_to_device(batch: dict[str, Any], device_id: Any):
-    ret = {}
-    for k, v in batch.items():
-        if isinstance(v, torch.Tensor):
-            ret[k] = v.to(device_id, non_blocking=True)
-        elif isinstance(v, dict):
-            ret[k] = move_to_device(v, device_id)
-        else:
-            ret[k] = v
-    return ret
 
 @torch.inference_mode()
 def test(model: nn.Module, test_loader: DataLoader, rank: int, world_size: int):
@@ -55,55 +44,6 @@ def test(model: nn.Module, test_loader: DataLoader, rank: int, world_size: int):
         "variance": np.mean(variances),
     }
     return gather_info(info_to_gather, world_size)
-
-def gather_info(info_to_gather: dict[Any, float], world_size: int):
-    gathered_infos: list[dict[Any, float]] = [None] * world_size
-    dist.all_gather_object(gathered_infos, info_to_gather)
-    return {k: np.mean([d[k] for d in gathered_infos]) for k in info_to_gather}
-
-def safe_div(a: int, b: int):
-    if a % b != 0:
-        raise ValueError(f"Cannot divide {a} by {b} evenly!")
-    return a // b
-
-def nested_dict_to_flat_dict(d: dict[str, Any], pfx: str = ""):
-    flat_dict = {}
-    for k, v in d.items():
-        if isinstance(v, dict):
-            flat_dict.update(nested_dict_to_flat_dict(v, pfx=f"{pfx}{k}/"))
-        else:
-            flat_dict[f"{pfx}{k}"] = v
-    return flat_dict
-
-def build_wandb_config(config: DictConfig):
-    wandb_config = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
-    wandb_config["env"] = {
-        **{k: v for k, v in os.environ.items() if k.startswith("GANTRY_")},
-        **{k: v for k, v in os.environ.items() if k.startswith("BEAKER_")},
-    }
-    return wandb_config
-
-def create_dataloader(dataset: GraspDescriptionRegressionDataset, rank: int, world_size: int, config: DictConfig):
-    loader_kwargs = {
-        "persistent_workers": True,
-        "pin_memory": True,
-        "batch_size": safe_div(config["train"]["dataloader"]["batch_size"], world_size),
-        "num_workers": safe_div(config["train"]["dataloader"]["num_workers"], world_size),
-    }
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    return DataLoader(dataset, sampler=sampler, **loader_kwargs)
-
-def time_iter(iterable: Iterable[Any]):
-    it = iter(iterable)
-    while True:
-        start = time.perf_counter()
-        try:
-            item = next(it)
-        except StopIteration:
-            break
-        end = time.perf_counter()
-        yield end - start, item
-
 
 @hydra.main(version_base=None, config_path="../config", config_name="regression.yaml")
 def main(config: DictConfig):
@@ -158,10 +98,10 @@ def main(config: DictConfig):
     if test_frac > 0:
         gen = torch.Generator().manual_seed(config["train"]["seed"])
         train_dataset, test_dataset = random_split(dataset, [1 - test_frac, test_frac], generator=gen)
-        train_loader = create_dataloader(train_dataset, rank, world_size, config)
-        test_loader = create_dataloader(test_dataset, rank, world_size, config)
+        train_loader = create_dist_dataloader(train_dataset, rank, world_size, config)
+        test_loader = create_dist_dataloader(test_dataset, rank, world_size, config)
     else:
-        train_loader = create_dataloader(dataset, rank, world_size, config)
+        train_loader = create_dist_dataloader(dataset, rank, world_size, config)
         test_loader = None
 
     optimizer = optim.AdamW(model.parameters(), **config["train"]["optimizer"])

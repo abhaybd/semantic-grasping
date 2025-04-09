@@ -12,7 +12,7 @@ type: classification
 model:
   hidden_dim: 512
   feature_layers: [1024]
-  xyz_feature_layers: []
+  xyz_feature_layers: [1024]
   grasp_layers: [256, 256]
   final_fc_layers: [256, 256]
   rgb_encoder:
@@ -22,9 +22,11 @@ model:
     num_encoder_layers: 3
 
 train:
+  distributed:
+    world_size:  # will be populated by code
   dataloader:
-    batch_size: 256
-    num_workers: 16
+    batch_size: 256  # effective (will be divided by world size)
+    num_workers: 16  # effective (will be divided by world size)
   dataset:
     augment: true
     augmentation_params:
@@ -32,10 +34,14 @@ train:
       gray_scale_prob: 0.1
       horizontal_flip_prob: 0.5
       flip_grasp_prob: 0.5
+      depth_mask_prob: 0.5
+      depth_mask_scale_range: [0.02, 0.2]
+      depth_mask_ratio_range: [0.5, 2.0]
     data_dir: /data/observations
     csv_path: /dataset/dataset.csv
     text_embedding_path: /dataset/text_embeddings.npy
     use_frozen_text_embeddings: false
+    xyz_far_clip: 1.0  # meters
   optimizer:
     lr: 0.00005
     weight_decay: 0.0
@@ -43,12 +49,8 @@ train:
     frac: 0.2
     period: 500
   lr_schedule:
-    warmup_steps: 1
+    warmup_steps: 100
     final_factor: 0.2
   steps: 50000
   save_period: 2500
   seed: 42
-  grad_scaler:
-    enabled: false
-  autocast:
-    enabled: false

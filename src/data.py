@@ -148,112 +148,37 @@ class GraspDescriptionRegressionDataset(Dataset):
 class GraspDescriptionClassificationDataset(Dataset):
     def __init__(
         self,
-        data_df: pd.DataFrame,
+        csv_path: str,
         data_dir: str,
         img_processor: Callable[[Image.Image], torch.Tensor],
         text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
-        text_embeddings: Optional[np.ndarray] = None,
+        text_embeddings_path: Optional[str] = None,
+        use_frozen_text_embeddings: bool = False,
         augment: bool = True,
         augmentation_params: Optional[dict] = None
     ):
+        self.data_df = pd.read_csv(csv_path)
         self.data_dir = data_dir
-        self.data_df = data_df
-        self.text_embeddings = text_embeddings
+        self.text_embeddings = np.load(text_embeddings_path) if text_embeddings_path and use_frozen_text_embeddings else None
         aug_params = augmentation_params or {}
         self.transform = ImageAugmentation(**aug_params) if augment else None
         self.img_processor = img_processor
         self.text_processor = text_processor
 
-        self.unique_annots = self.data_df["annot"].unique().tolist()
-        annot_to_idx = {annot: i for i, annot in enumerate(self.unique_annots)}
-        self.n_unique_annots = len(self.unique_annots)
-        self.obs_to_annot_id = np.empty(len(self.data_df), dtype=np.uint32)
-        for i, row in self.data_df.iterrows():
-            annot = row["annot"]
-            self.obs_to_annot_id[i] = annot_to_idx[annot]
-
     def __len__(self):
-        return len(self.data_df) * self.n_unique_annots
-
-    @classmethod
-    def load(
-        cls,
-        csv_path: str,
-        data_dir: str,
-        img_processor: Callable[[Image.Image], torch.Tensor],
-        text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
-        text_embedding_path: Optional[str] = None,
-        use_frozen_text_embeddings: bool = False,
-        augment: bool = True,
-        augmentation_params: Optional[dict] = None
-    ):
-        df = pd.read_csv(csv_path)
-        text_embeddings = np.load(text_embedding_path) if text_embedding_path is not None and use_frozen_text_embeddings else None
-        return cls(
-            df,
-            data_dir,
-            img_processor,
-            text_processor,
-            text_embeddings,
-            augment,
-            augmentation_params
-        )
-
-    @classmethod
-    def load_split(
-        cls,
-        csv_path: str,
-        data_dir: str,
-        img_processor: Callable[[Image.Image], torch.Tensor],
-        text_processor: Callable[[str], tuple[torch.Tensor, torch.Tensor]],
-        fracs: list[float],
-        augment: bool = True,
-        text_embedding_path: str = None,
-        use_frozen_text_embeddings: bool = False,
-        augmentation_params: Optional[dict] = None,
-        seed: Optional[int] = None
-    ) -> list["GraspDescriptionClassificationDataset"]:
-        assert np.isclose(sum(fracs), 1.0)
-        if len(fracs) == 1:
-            return [cls.load(csv_path, data_dir, img_processor, text_processor, augment, augmentation_params)]
-        df = pd.read_csv(csv_path)
-        text_embeddings = np.load(text_embedding_path) if text_embedding_path is not None and use_frozen_text_embeddings else None
-        n_rows = len(df)
-        shuffled_indices = np.random.RandomState(seed=seed).permutation(n_rows)
-
-        # Compute partition sizes and split indices
-        sizes = (np.array(fracs) * n_rows).astype(int)
-        sizes[-1] += n_rows - sizes.sum()  # Ensure the sum of sizes equals n_rows
-        indices = np.split(shuffled_indices, np.cumsum(sizes)[:-1])
-
-        subsets = []
-        for idxs in indices:
-            sub_df = df.iloc[idxs].reset_index(drop=True, inplace=False)
-            sub_embeddings = text_embeddings[idxs] if text_embeddings is not None else None
-            dataset = cls(
-                sub_df,
-                data_dir,
-                img_processor,
-                text_processor,
-                sub_embeddings,
-                augment,
-                augmentation_params
-            )
-            subsets.append(dataset)
-        return subsets
+        return len(self.data_df)
 
     def __getitem__(self, idx):
-        annot_idx, obs_idx = divmod(idx, len(self.data_df))
-        row = self.data_df.iloc[obs_idx]
+        row = self.data_df.iloc[idx]
 
         obs = load_obs(self.data_dir, row)
         rgb: Image.Image = obs['rgb']
         xyz: np.ndarray = obs['xyz']
         grasp_pose: np.ndarray = obs['grasp_pose']
 
-        xyz = torch.from_numpy(xyz).float()  # (H, W, 3)
+        xyz: torch.Tensor = torch.from_numpy(xyz).float()  # (H, W, 3)
         xyz = xyz.permute(2, 0, 1)  # (3, H, W)
-        grasp_pose = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
+        grasp_pose: torch.Tensor = torch.from_numpy(grasp_pose).float()  # 4x4 transform matrix
 
         far_clip_mask = xyz[2] >= self.xyz_far_clip
         xyz[:, far_clip_mask] = 0.0
@@ -277,38 +202,12 @@ class GraspDescriptionClassificationDataset(Dataset):
         rgb = self.img_processor(rgb)
 
         if rgb.shape[-2:] != xyz.shape[-2:]:
-            xyz = trfF.resize(xyz, rgb.shape[-2:])
-
-        label = torch.tensor([1 if self.obs_to_annot_id[obs_idx] == annot_idx else 0]).float()
+            xyz = trfF.resize(xyz, rgb.shape[-2:], interpolation=InterpolationMode.NEAREST_EXACT)
 
         return {
-            "rgb": rgb,
-            "xyz": xyz,
-            "grasp_pose": grasp_pose,
-            "text_inputs": text_inputs,
-            "label": label,
+            'annotation_id': row['annotation_id'],
+            'rgb': rgb,
+            'xyz': xyz,
+            'grasp_pose': grasp_pose,
+            'text_inputs': text_inputs
         }
-
-class GraspDescriptionClassificationSampler(Sampler):
-    def __init__(self, dataset: GraspDescriptionClassificationDataset):
-        self.dataset = dataset
-
-    def __len__(self):
-        return 2 * len(self.dataset.data_df)
-
-    def __iter__(self):
-        match_idxs = []
-        nonmatch_idxs = []
-
-        obs_ids = np.arange(len(self.dataset.data_df))
-        matching_annot_ids = self.dataset.obs_to_annot_id[obs_ids]
-        match_idxs = matching_annot_ids * len(self.dataset.data_df) + obs_ids
-
-        nonmatching_annot_ids = np.random.randint(self.dataset.n_unique_annots-1, size=len(self.dataset.data_df))
-        nonmatching_annot_ids[nonmatching_annot_ids >= matching_annot_ids] += 1
-        nonmatch_idxs = nonmatching_annot_ids * len(self.dataset.data_df) + obs_ids
-
-        idxs = np.concatenate([match_idxs, nonmatch_idxs])
-        np.random.shuffle(idxs)
-
-        return iter(idxs)
