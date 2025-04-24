@@ -1,8 +1,4 @@
-import base64
-import io
-import json
-import requests
-from abc import ABC
+from abc import ABC, abstractmethod
 import re
 import xml.etree.ElementTree as ElementTree
 from typing import Optional
@@ -11,20 +7,13 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy.spatial import KDTree
 
-MODEL_ENDPOINT = "https://ai2-reviz--graspmolmo-focused-cotraining-06-10k.modal.run/completion_stream"
-ZERO_SHOT_MODEL_ENDPOINT = "https://ai2-reviz--uber-model-v4-synthetic.modal.run/completion_stream"
 
 DRAW_POINTS = np.array([
     [0.041, 0, 0.112],
     [0.041, 0, 0.066],
     [-0.041, 0, 0.066],
     [-0.041, 0, 0.112],
-])
-
-def encode_image(image: Image.Image):
-    image_bytes = io.BytesIO()
-    image.save(image_bytes, format="PNG")
-    return base64.b64encode(image_bytes.getvalue()).decode("utf-8")
+])  # in grasp frame
 
 def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
     """
@@ -55,54 +44,33 @@ def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
         print(f"Failed to parse XML: {e}")
     return None
 
-class MolmoInfer(ABC):
-    def __init__(self, model_endpoint: str, headers: dict):
-        self.model_endpoint = model_endpoint
-        self.headers = headers
+class MolmoPredictor(ABC):
+    @abstractmethod
+    def _pred(self, image: Image.Image, task: str, verbosity: int = 0) -> str:
+        raise NotImplementedError
 
-    def _send_request(self, payload: dict) -> str:
-        headers = {"Content-Type": "application/json", **self.headers}
-        response = requests.post(
-            self.model_endpoint,
-            headers=headers,
-            data=json.dumps(payload),
-            stream=True
-        )
-        return response
+    def pred_point(self, image: Image.Image, task: str, verbosity: int = 0) -> np.ndarray:
+        """
+        Args:
+            image: The image of the scene.
+            task: The task to predict the grasp point for.
+            verbosity: The verbosity level, higher is more.
+        Returns:
+            The predicted point as a numpy array of shape (2,).
+        """
+        pred = self._pred(image, task, verbosity)
+        point = parse_point(pred, image.size)
+        if point is None:
+            raise ValueError(f"Failed to parse point from prediction: {pred}")
 
-    def pred_point(self, image: Image.Image, task: str, verbosity: int = 0) -> Optional[np.ndarray]:
-        image_enc = encode_image(image)
-
-        payload = {
-            "input_text": [f"robot_control: instruction: Point to the grasp that would accomplish the following task: {task}"],
-            "input_image": [image_enc]
-        }
-        try:
-            response = self._send_request(payload)
-            if verbosity >= 1:
-                print(f"Molmo API Response Status Code: {response.status_code}")
-
-            # Check if response is valid
-            if response.status_code != 200:
-                raise ValueError(f"[ERROR] Molmo API failed: {response.text}")
-
-            # Process streaming response
-            response_text = ""
-            for chunk in response.iter_lines():
-                if chunk:
-                    response_text += json.loads(chunk)["result"]["output"]["text"]
-            if verbosity >= 1:
-                print("Molmo API Response:", response_text)
-        except Exception as e:
-            raise ValueError(f"[ERROR] Failed to query Molmo API: {str(e)}")
-
-        point = parse_point(response_text, image.size)
         if verbosity >= 1:
-            print("Predicted point:", point)
+            print(f"Predicted point: {point}")
+
         if verbosity >= 3:
             draw = ImageDraw.Draw(image)
             r = 5
-            draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="green")
+            draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="red")
+
         return point
 
     def pred_grasp(self, image: Image.Image, pc: np.ndarray, task: str, grasps: np.ndarray, cam_K: np.ndarray, verbosity: int = 0) -> int:
@@ -117,8 +85,6 @@ class MolmoInfer(ABC):
             The index of the grasp to perform.
         """
         point = self.pred_point(image, task, verbosity=verbosity)
-        if point is None:
-            return point
 
         grasp_pos = grasps[:, :3, 3] + grasps[:, :3, 2] * 0.066
 
@@ -150,11 +116,3 @@ class MolmoInfer(ABC):
                 draw.line(p0 + p1, fill="red", width=2)
 
         return grasp_idx
-
-class ZeroShotMolmo(MolmoInfer):
-    def __init__(self, token: str):
-        super().__init__(ZERO_SHOT_MODEL_ENDPOINT, {"Authorization": f"Bearer {token}"})
-
-class GraspMolmo(MolmoInfer):
-    def __init__(self):
-        super().__init__(MODEL_ENDPOINT, {})
