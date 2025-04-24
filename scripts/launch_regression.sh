@@ -20,9 +20,9 @@ gantry run -w ai2/abhayd -b ai2/prior \
     --cluster ai2/ceres-cirrascale \
     --shared-memory 128GiB \
     --allow-dirty \
-    --install "pip install -r requirements-setup.txt ; pip install -r requirements.txt" \
+    --install "pip install -e .[train]" \
     -- \
-    torchrun --standalone --nnodes=1 --nproc_per_node=$WORLD_SIZE src/train_regression.py \
+    torchrun --standalone --nnodes=1 --nproc_per_node=$WORLD_SIZE semantic_grasping/train_regression.py \
         train.dataset.data_dir=/data/abhayd/semantic-grasping-datasets/${DATASET_NAME}/observations \
         train.dataset.csv_path=/data/abhayd/semantic-grasping-datasets/${DATASET_NAME}/dataset.csv \
         train.dataset.text_embedding_path=/data/abhayd/semantic-grasping-datasets/${DATASET_NAME}/text_embeddings.npy
