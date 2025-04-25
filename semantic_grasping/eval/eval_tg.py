@@ -17,6 +17,7 @@ def get_args():
     parser.add_argument("out_dir")
     parser.add_argument("split")
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--random", action="store_true")
     return parser.parse_args()
 
 def parse_view_labels(tg_library: TaskGraspScanLibrary, path: str):
@@ -65,6 +66,26 @@ def filter_view_labels_for_fold(tg_library: TaskGraspScanLibrary, view_labels: d
 @cache
 def get_sample(tg_library: TaskGraspScanLibrary, object_id: str, view_id: int):
     return tg_library.get(object_id, view_id)
+
+def random_eval_fold(tg_library: TaskGraspScanLibrary, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]]):
+    view_labels = filter_view_labels_for_fold(tg_library, all_view_labels, split_dir, fold)
+
+    eval_data = []
+    for (object_id, view_id), task_grasps in view_labels.items():
+        for task_verb, grasp_ids in task_grasps.items():
+            eval_data.append((object_id, view_id, task_verb, grasp_ids))
+
+    succ = []
+    for object_id, view_id, task_verb, grasp_ids in eval_data:
+        sample = get_sample(tg_library, object_id, view_id)
+        grasps = sample["registered_grasps"]
+        succ.append(len(grasp_ids) / len(grasps))
+    return {
+        "split": os.path.basename(split_dir),
+        "fold": fold,
+        "n_samples": len(eval_data),
+        "n_succ": sum(succ),
+    }
 
 def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]], batch_size: int):
     view_labels = filter_view_labels_for_fold(tg_library, all_view_labels, split_dir, fold)
@@ -125,7 +146,6 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     tg_library = TaskGraspScanLibrary(args.tg_dir)
-    predictor = MolmoLocalPredictor(args.ckpt_dir)
 
     split_dir = os.path.join(args.tg_dir, "splits_final", args.split)
     if not os.path.isdir(split_dir):
@@ -134,15 +154,26 @@ def main():
     # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
     view_labels = parse_view_labels(tg_library, os.path.join(args.tg_dir, "task2_results.txt"))
 
-    eval_results = {}
-    accs = []
-    for fold in sorted(os.listdir(split_dir)):
-        eval_results[fold] = eval_fold(tg_library, predictor, split_dir, fold, view_labels, args.batch_size)
-        accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
-    print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
+    if args.random:
+        eval_results = {}
+        accs = []
+        for fold in sorted(os.listdir(split_dir)):
+            eval_results[fold] = random_eval_fold(tg_library, split_dir, fold, view_labels)
+            accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
+        print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
+        with open(os.path.join(args.out_dir, f"results_random_{args.split}.json"), "w") as f:
+            json.dump(eval_results, f, indent=2)
+    else:
+        predictor = MolmoLocalPredictor(args.ckpt_dir)
+        eval_results = {}
+        accs = []
+        for fold in sorted(os.listdir(split_dir)):
+            eval_results[fold] = eval_fold(tg_library, predictor, split_dir, fold, view_labels, args.batch_size)
+            accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
+        print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
 
-    with open(os.path.join(args.out_dir, f"results_{args.split}.json"), "w") as f:
-        json.dump(eval_results, f, indent=2)
+        with open(os.path.join(args.out_dir, f"results_{args.split}.json"), "w") as f:
+            json.dump(eval_results, f, indent=2)
 
 if __name__ == "__main__":
     main()
