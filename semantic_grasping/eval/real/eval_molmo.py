@@ -5,7 +5,7 @@ from PIL import Image
 import numpy as np
 
 from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
-from semantic_grasping.eval.molmo_remote_pred import ZeroShotMolmo, GraspMolmo
+from semantic_grasping.eval.molmo_remote_pred import ZeroShotMolmoModal, GraspMolmoModal, GraspMolmoBeaker
 
 
 def get_args():
@@ -24,7 +24,8 @@ def depth_to_pc(depth: np.ndarray, cam_K: np.ndarray) -> np.ndarray:
     return xyz
 
 def get_obs():
-    library = TaskGraspScanLibrary("../semantic-grasping-datagen/data/taskgrasp/taskgrasp/scans")
+    # library = TaskGraspScanLibrary("../semantic-grasping-datagen/data/taskgrasp/taskgrasp/scans")
+    library = TaskGraspScanLibrary("../semantic-grasping-datasets/taskgrasp_image")
     data = library.get("003_pan", 0)
     image: Image.Image = data["rgb"]
     depth: np.ndarray = data["depth"]
@@ -37,9 +38,9 @@ def main():
 
     if args.zero_shot:
         token = os.getenv("MOLMO_TOKEN")
-        molmo = ZeroShotMolmo(token)
+        molmo = ZeroShotMolmoModal(token)
     else:
-        molmo = GraspMolmo()
+        molmo = GraspMolmoBeaker("http://neptune-cs-aus-256.reviz.ai2.in:8080/api/predict_point")
 
     image, depth, cam_K, grasps = get_obs()
     pc: np.ndarray = depth_to_pc(depth, cam_K)

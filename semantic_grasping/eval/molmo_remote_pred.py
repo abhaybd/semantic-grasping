@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import requests
+from typing import Optional
 
 from PIL import Image
 
@@ -17,9 +18,13 @@ def encode_image(image: Image.Image):
     return base64.b64encode(image_bytes.getvalue()).decode("utf-8")
 
 class MolmoWebPredictor(MolmoPredictor):
-    def __init__(self, model_endpoint: str, headers: dict):
+    def __init__(self, model_endpoint: str, headers: dict, prompt_prefix: Optional[str] = None):
         self.model_endpoint = model_endpoint
         self.headers = headers
+        if prompt_prefix is None:
+            self.prompt_prefix = "robot_control: instruction: Point to the grasp that would accomplish the following task: "
+        else:
+            self.prompt_prefix = prompt_prefix
 
     def _send_request(self, payload: dict):
         headers = {"Content-Type": "application/json", **self.headers}
@@ -37,7 +42,7 @@ class MolmoWebPredictor(MolmoPredictor):
             image_enc = encode_image(image)
 
             payload = {
-                "input_text": [f"robot_control: instruction: Point to the grasp that would accomplish the following task: {task}"],
+                "input_text": [f"{self.prompt_prefix}{task}"],
                 "input_image": [image_enc]
             }
             try:
@@ -61,10 +66,14 @@ class MolmoWebPredictor(MolmoPredictor):
             ret.append(response_text)
         return ret
 
-class ZeroShotMolmo(MolmoWebPredictor):
+class ZeroShotMolmoModal(MolmoWebPredictor):
     def __init__(self, token: str):
         super().__init__(ZERO_SHOT_MODEL_ENDPOINT, {"Authorization": f"Bearer {token}"})
 
-class GraspMolmo(MolmoWebPredictor):
+class GraspMolmoModal(MolmoWebPredictor):
     def __init__(self):
         super().__init__(MODEL_ENDPOINT, {})
+
+class GraspMolmoBeaker(MolmoWebPredictor):
+    def __init__(self, endpoint: str):
+        super().__init__(endpoint, {}, prompt_prefix="")

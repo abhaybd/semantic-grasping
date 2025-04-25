@@ -23,6 +23,7 @@ train_deps = [
 
 eval_deps = [
     "semantic-grasping-datagen @ git+https://github.com/abhaybd/semantic-grasping-datagen.git",
+    "fastapi[standard]",
 ]
 
 setup(
