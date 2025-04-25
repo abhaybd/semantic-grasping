@@ -14,6 +14,7 @@ from semantic_grasping.eval.molmo_pred import MolmoPredictor
 
 class MolmoLocalPredictor(MolmoPredictor):
     def __init__(self, ckpt_dir: str, device: str = "cuda"):
+        self.ckpt_dir = ckpt_dir
         self.model = Molmo.from_checkpoint(ckpt_dir, device=device)
         self.processor = build_mm_preprocessor(self.model.config, for_inference=True)
         self.collator = MMCollator(include_metadata=False)
