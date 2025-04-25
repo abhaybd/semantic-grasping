@@ -21,6 +21,10 @@ train_deps = [
     "nv_embed_v2 @ git+https://github.com/abhaybd/NV-Embed-v2_fixed.git",
 ]
 
+eval_deps = [
+    "semantic-grasping-datagen @ git+https://github.com/abhaybd/semantic-grasping-datagen.git",
+]
+
 setup(
     name="semantic-grasping",
     version="0.1.0",
@@ -30,7 +34,8 @@ setup(
     install_requires=base_deps,
     extras_require={
         "train": train_deps,
-        "all": train_deps,
+        "eval": eval_deps,
+        "all": train_deps + eval_deps,
     },
     python_requires=">=3.10",
     classifiers=[

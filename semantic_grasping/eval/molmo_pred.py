@@ -15,6 +15,16 @@ DRAW_POINTS = np.array([
     [-0.041, 0, 0.112],
 ])  # in grasp frame
 
+def depth_to_pc(depth: np.ndarray, cam_K: np.ndarray) -> np.ndarray:
+    h, w = depth.shape
+    u, v = np.meshgrid(np.arange(w), np.arange(h), indexing="xy")
+    depth_mask = (depth > 0)
+    uvd = np.stack((u, v, np.ones_like(u)), axis=-1).astype(np.float32)
+    uvd *= np.expand_dims(depth, axis=-1)
+    uvd = uvd[depth_mask]
+    xyz = np.linalg.solve(cam_K, uvd.T).T
+    return xyz
+
 def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
     """
     Args:
@@ -110,7 +120,7 @@ class MolmoPredictor(ABC):
             grasp_points_2d = grasp_points_2d[:, :2] / grasp_points_2d[:, 2:3]
 
             dists = np.linalg.norm(grasp_points_2d - point[None], axis=1)
-            grasp_idx = np.argmin(dists)
+            grasp_idx = np.argmin(dists).item()
             grasp_idxs.append(grasp_idx)
 
             if verbosity >= 3:
