@@ -12,6 +12,7 @@ for split in $SPLITS; do
         --task-name "molmo_tg_eval_${split}_${TIMESTAMP}" \
         --env-secret GITHUB_TOKEN=GITHUB_TOKEN \
         --dataset-secret SSH_KEY:/root/.ssh/id_ed25519 \
+        --beaker-image ai2/cuda11.8-dev-ubuntu20.04 \
         --gpus 1 \
         --weka prior-default:/weka/prior \
         --weka oe-training-default:/weka/oe-training-default \
