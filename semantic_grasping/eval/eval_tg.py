@@ -23,7 +23,10 @@ def parse_view_labels(tg_library: TaskGraspScanLibrary, path: str):
     view_labels: dict[tuple[str, int], dict[str, set[int]]] = {}  # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
     with open(path, "r") as f:
         for line in f:
-            part1, label = line.strip().split(":")
+            line = line.strip()
+            if not line:
+                continue
+            part1, label = line.split(":")
             obj_id, grasp_id, task_verb = part1.split("-")
             if label == "1":
                 view_ids = tg_library.get_views(obj_id)
@@ -59,6 +62,10 @@ def filter_view_labels_for_fold(tg_library: TaskGraspScanLibrary, view_labels: d
             assert len(s) > 0, f"No grasp ids for {k} and {t}"
     return new_view_labels
 
+@cache
+def get_sample(tg_library: TaskGraspScanLibrary, object_id: str, view_id: int):
+    return tg_library.get(object_id, view_id)
+
 def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]], batch_size: int):
     view_labels = filter_view_labels_for_fold(tg_library, all_view_labels, split_dir, fold)
 
@@ -87,7 +94,7 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, 
             cam_Ks = []
 
             for object_id, view_id, task_verb, grasp_ids in batch_eval_data:
-                sample = get_sample(object_id, view_id)
+                sample = get_sample(tg_library, object_id, view_id)
                 images.append(sample["rgb"])
                 pc = depth_to_pc(sample["depth"], sample["cam_params"])
                 pcs.append(pc)
@@ -119,10 +126,6 @@ def main():
 
     tg_library = TaskGraspScanLibrary(args.tg_dir)
     predictor = MolmoLocalPredictor(args.ckpt_dir)
-
-    @cache
-    def get_sample(object_id: str, view_id: int):
-        return tg_library.get(object_id, view_id)
 
     split_dir = os.path.join(args.tg_dir, "splits_final", args.split)
     if not os.path.isdir(split_dir):
