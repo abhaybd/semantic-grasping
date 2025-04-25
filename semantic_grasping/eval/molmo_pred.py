@@ -46,73 +46,88 @@ def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
 
 class MolmoPredictor(ABC):
     @abstractmethod
-    def _pred(self, image: Image.Image, task: str, verbosity: int = 0) -> str:
+    def _pred(self, images: list[Image.Image], tasks: list[str], verbosity: int = 0) -> list[str]:
         raise NotImplementedError
 
-    def pred_point(self, image: Image.Image, task: str, verbosity: int = 0) -> np.ndarray:
+    def pred_points(self, images: list[Image.Image], tasks: list[str], verbosity: int = 0) -> np.ndarray:
         """
         Args:
-            image: The image of the scene.
-            task: The task to predict the grasp point for.
+            images: The images of the scene.
+            tasks: The tasks to predict the grasp point for.
             verbosity: The verbosity level, higher is more.
         Returns:
-            The predicted point as a numpy array of shape (2,).
+            The predicted points as a numpy array of shape (B, 2).
         """
-        pred = self._pred(image, task, verbosity)
-        point = parse_point(pred, image.size)
-        if point is None:
-            raise ValueError(f"Failed to parse point from prediction: {pred}")
+        preds = self._pred(images, tasks, verbosity)
+
+        points = []
+        for pred, image in zip(preds, images):
+            point = parse_point(pred, image.size)
+            if point is None:
+                raise ValueError(f"Failed to parse point from prediction: {pred}")
+            points.append(point)
+        points = np.array(points)
 
         if verbosity >= 1:
-            print(f"Predicted point: {point}")
+            print(f"Predicted points: {points}")
 
         if verbosity >= 3:
-            draw = ImageDraw.Draw(image)
-            r = 5
-            draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="red")
+            for image, point in zip(images, points):
+                draw = ImageDraw.Draw(image)
+                r = 5
+                draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="red")
 
-        return point
+        return points
 
-    def pred_grasp(self, image: Image.Image, pc: np.ndarray, task: str, grasps: np.ndarray, cam_K: np.ndarray, verbosity: int = 0) -> int:
+    def pred_grasp(self, images: list[Image.Image], pcs: list[np.ndarray], tasks: list[str], grasps: list[np.ndarray], cam_Ks: list[np.ndarray], verbosity: int = 0) -> list[int]:
         """
         Args:
-            image: The image of the scene.
-            pc: (N, 3) The point cloud of the scene.
-            task: The task to perform.
-            grasps: (N, 4, 4) The grasps to choose from, in camera frame.
-            cam_K: (3, 3) The camera intrinsic matrix.
+            images: The images of the scene.
+            pcs: list of (*, 3) The point clouds of the scene.
+            tasks: The tasks to perform.
+            grasps: list of (N, 4, 4) The grasps to choose from, in camera frame.
+            cam_Ks: list of (3, 3) The camera intrinsic matrices.
         Returns:
-            The index of the grasp to perform.
+            The indexes of the grasp to perform.
         """
-        point = self.pred_point(image, task, verbosity=verbosity)
+        points = self.pred_points(images, tasks, verbosity=verbosity)
 
-        grasp_pos = grasps[:, :3, 3] + grasps[:, :3, 2] * 0.066
+        grasp_idxs = []
+        for i in range(len(images)):
+            point = points[i]
+            sample_grasps = grasps[i]
+            pc = pcs[i]
+            image = images[i]
+            cam_K = cam_Ks[i]
 
-        tree = KDTree(pc[:, :3])
-        _, point_idxs = tree.query(grasp_pos, k=1)
-        grasp_points = pc[point_idxs, :3]
+            grasp_pos = sample_grasps[:, :3, 3] + sample_grasps[:, :3, 2] * 0.066
 
-        grasp_points_2d = grasp_points @ cam_K.T
-        grasp_points_2d = grasp_points_2d[:, :2] / grasp_points_2d[:, 2:3]
+            tree = KDTree(pc[:, :3])
+            _, point_idxs = tree.query(grasp_pos, k=1)
+            grasp_points = pc[point_idxs, :3]
 
-        dists = np.linalg.norm(grasp_points_2d - point[None], axis=1)
-        grasp_idx = np.argmin(dists)
+            grasp_points_2d = grasp_points @ cam_K.T
+            grasp_points_2d = grasp_points_2d[:, :2] / grasp_points_2d[:, 2:3]
 
-        if verbosity >= 3:
-            draw = ImageDraw.Draw(image)
-            r = 5
-            for grasp_point in grasp_points_2d:
-                draw.ellipse((grasp_point[0] - r, grasp_point[1] - r, grasp_point[0] + r, grasp_point[1] + r), fill="blue")
+            dists = np.linalg.norm(grasp_points_2d - point[None], axis=1)
+            grasp_idx = np.argmin(dists)
+            grasp_idxs.append(grasp_idx)
 
-            grasp = grasps[grasp_idx]
-            draw_points = DRAW_POINTS @ grasp[:3, :3].T + grasp[:3, 3]
-            draw_points_px = draw_points @ cam_K.T
-            draw_points_px = draw_points_px[:, :2] / draw_points_px[:, 2:3]
-            draw_points_px = draw_points_px.round().astype(int).tolist()
+            if verbosity >= 3:
+                draw = ImageDraw.Draw(image)
+                r = 5
+                for grasp_point in grasp_points_2d:
+                    draw.ellipse((grasp_point[0] - r, grasp_point[1] - r, grasp_point[0] + r, grasp_point[1] + r), fill="blue")
 
-            for i in range(len(DRAW_POINTS)-1):
-                p0 = draw_points_px[i]
-                p1 = draw_points_px[i+1]
-                draw.line(p0 + p1, fill="red", width=2)
+                grasp = sample_grasps[grasp_idx]
+                draw_points = DRAW_POINTS @ grasp[:3, :3].T + grasp[:3, 3]
+                draw_points_px = draw_points @ cam_K.T
+                draw_points_px = draw_points_px[:, :2] / draw_points_px[:, 2:3]
+                draw_points_px = draw_points_px.round().astype(int).tolist()
 
-        return grasp_idx
+                for i in range(len(DRAW_POINTS)-1):
+                    p0 = draw_points_px[i]
+                    p1 = draw_points_px[i+1]
+                    draw.line(p0 + p1, fill="red", width=2)
+
+        return grasp_idxs

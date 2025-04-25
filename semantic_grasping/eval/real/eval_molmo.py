@@ -46,7 +46,7 @@ def main():
 
     task = "Put the pan on the stove."
 
-    grasp_idx = molmo.pred_grasp(image, pc, task, grasps, cam_K, verbosity=3)
+    grasp_idx = molmo.pred_grasp([image], [pc], [task], [grasps], [cam_K], verbosity=3)[0]
 
     print(f"Predicted grasp index: {grasp_idx}")
     image.save("pred.png")

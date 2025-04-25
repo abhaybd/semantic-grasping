@@ -31,32 +31,35 @@ class MolmoWebPredictor(MolmoPredictor):
         )
         return response
 
-    def _pred(self, image: Image.Image, task: str, verbosity: int = 0) -> str:
-        image_enc = encode_image(image)
+    def _pred(self, images: list[Image.Image], tasks: list[str], verbosity: int = 0) -> list[str]:
+        ret = []
+        for image, task in zip(images, tasks):
+            image_enc = encode_image(image)
 
-        payload = {
-            "input_text": [f"robot_control: instruction: Point to the grasp that would accomplish the following task: {task}"],
-            "input_image": [image_enc]
-        }
-        try:
-            response = self._send_request(payload)
-            if verbosity >= 1:
-                print(f"Molmo API Response Status Code: {response.status_code}")
+            payload = {
+                "input_text": [f"robot_control: instruction: Point to the grasp that would accomplish the following task: {task}"],
+                "input_image": [image_enc]
+            }
+            try:
+                response = self._send_request(payload)
+                if verbosity >= 1:
+                    print(f"Molmo API Response Status Code: {response.status_code}")
 
-            # Check if response is valid
-            if response.status_code != 200:
-                raise ValueError(f"[ERROR] Molmo API failed: {response.text}")
+                # Check if response is valid
+                if response.status_code != 200:
+                    raise ValueError(f"[ERROR] Molmo API failed: {response.text}")
 
-            # Process streaming response
-            response_text = ""
-            for chunk in response.iter_lines():
-                if chunk:
-                    response_text += json.loads(chunk)["result"]["output"]["text"]
-            if verbosity >= 1:
-                print("Molmo API Response:", response_text)
-        except Exception as e:
-            raise ValueError(f"[ERROR] Failed to query Molmo API: {str(e)}")
-        return response_text
+                # Process streaming response
+                response_text = ""
+                for chunk in response.iter_lines():
+                    if chunk:
+                        response_text += json.loads(chunk)["result"]["output"]["text"]
+                if verbosity >= 1:
+                    print("Molmo API Response:", response_text)
+            except Exception as e:
+                raise ValueError(f"[ERROR] Failed to query Molmo API: {str(e)}")
+            ret.append(response_text)
+        return ret
 
 class ZeroShotMolmo(MolmoWebPredictor):
     def __init__(self, token: str):
