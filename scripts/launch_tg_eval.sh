@@ -10,6 +10,7 @@ for split in $SPLITS; do
     gantry run -w ai2/abhayd -b ai2/prior \
         --name "molmo_tg_eval_${split}_${TIMESTAMP}" \
         --task-name "molmo_tg_eval_${split}_${TIMESTAMP}" \
+        --env-secret GITHUB_TOKEN=GITHUB_TOKEN \
         --gpus 1 \
         --weka prior-default:/weka/prior \
         --weka oe-training-default:/weka/oe-training-default \
