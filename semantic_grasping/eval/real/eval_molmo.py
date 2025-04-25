@@ -5,7 +5,7 @@ from PIL import Image
 import numpy as np
 
 from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
-from semantic_grasping.eval.real.molmo_pred import ZeroShotMolmo, GraspMolmo
+from semantic_grasping.eval.molmo_remote_pred import ZeroShotMolmo, GraspMolmo
 
 
 def get_args():
