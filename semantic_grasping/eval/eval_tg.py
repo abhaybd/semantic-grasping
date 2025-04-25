@@ -58,7 +58,11 @@ def main():
 
     n_succ = 0
     n_samples = 0
-    results = {}
+    results_data = {
+        "results": {},
+        "ckpt_dir": args.ckpt_dir,
+        "split": args.split,
+    }
     with tqdm(total=len(eval_data)) as pbar:
         for i in range(0, len(eval_data), args.batch_size):
             batch_eval_data = eval_data[i:i+args.batch_size]
@@ -79,7 +83,7 @@ def main():
 
             pred_grasp_ids = predictor.pred_grasp(images, pcs, tasks, grasps, cam_Ks)
             for pred_grasp_id, (object_id, view_id, task_verb, grasp_ids) in zip(pred_grasp_ids, batch_eval_data):
-                results[f"{object_id}-{view_id}-{task_verb}"] = {
+                results_data["results"][f"{object_id}-{view_id}-{task_verb}"] = {
                     "pred_grasp_id": pred_grasp_id,
                     "gt_grasp_ids": list(grasp_ids),
                     "success": pred_grasp_id in grasp_ids
@@ -93,7 +97,7 @@ def main():
     print(f"Top-1 accuracy: {n_succ}/{len(eval_data)}={n_succ / len(eval_data):.1%}")
 
     with open(os.path.join(args.out_dir, f"results_{args.split}.json"), "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(results_data, f, indent=2)
 
 if __name__ == "__main__":
     main()

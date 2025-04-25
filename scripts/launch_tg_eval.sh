@@ -11,6 +11,7 @@ for split in $SPLITS; do
         --name "molmo_tg_eval_${split}_${TIMESTAMP}" \
         --task-name "molmo_tg_eval_${split}_${TIMESTAMP}" \
         --env-secret GITHUB_TOKEN=GITHUB_TOKEN \
+        --dataset-secret SSH_KEY:/root/.ssh/id_ed25519 \
         --gpus 1 \
         --weka prior-default:/weka/prior \
         --weka oe-training-default:/weka/oe-training-default \
@@ -19,6 +20,7 @@ for split in $SPLITS; do
         --cluster ai2/saturn-cirrascale \
         --cluster ai2/ceres-cirrascale \
         --install "./scripts/install_molmo.sh && pip install -e .[eval]" \
+        --allow-dirty \
         -- \
-        python semantic_grasping/eval/tg_img.py $TG_DIR $CKPT_DIR $OUT_DIR $split --batch-size 8
+        python semantic_grasping/eval/eval_tg.py $TG_DIR $CKPT_DIR $OUT_DIR $split --batch-size 8
 done
