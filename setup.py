@@ -21,10 +21,6 @@ train_deps = [
     "nv_embed_v2 @ git+https://github.com/abhaybd/NV-Embed-v2_fixed.git",
 ]
 
-molmo_deps = [
-    "ai2-molmo @ git+https://github.com/allenai/robo_mm_olmo.git@da59a08697b780f4bc64bed0ce80249c996332a1#egg=ai2-molmo[all]"
-]
-
 setup(
     name="semantic-grasping",
     version="0.1.0",
@@ -34,8 +30,7 @@ setup(
     install_requires=base_deps,
     extras_require={
         "train": train_deps,
-        "molmo": molmo_deps,
-        "all": train_deps + molmo_deps,
+        "all": train_deps,
     },
     python_requires=">=3.10",
     classifiers=[
