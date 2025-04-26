@@ -129,13 +129,14 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, 
 
             pred_grasp_ids = predictor.pred_grasp(images, pcs, tasks, grasps, cam_Ks)
             for pred_grasp_id, (object_id, view_id, task_verb, grasp_ids) in zip(pred_grasp_ids, batch_eval_data):
-                results_data["results"][f"{object_id}-{view_id}-{task_verb}"] = {
-                    "pred_grasp_id": pred_grasp_id,
-                    "gt_grasp_ids": list(grasp_ids),
-                    "success": pred_grasp_id in grasp_ids
-                }
-                if pred_grasp_id in grasp_ids:
-                    n_succ += 1
+                if pred_grasp_id is not None:
+                    results_data["results"][f"{object_id}-{view_id}-{task_verb}"] = {
+                        "pred_grasp_id": pred_grasp_id,
+                        "gt_grasp_ids": list(grasp_ids),
+                        "success": pred_grasp_id in grasp_ids
+                    }
+                    if pred_grasp_id in grasp_ids:
+                        n_succ += 1
                 n_samples += 1
             pbar.update(len(batch_eval_data))
             pbar.set_description(f"Evaluating fold {fold} (top-1 acc={n_succ}/{n_samples}={n_succ / n_samples:.1%})")

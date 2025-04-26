@@ -33,7 +33,7 @@ def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
     Returns:
         The predicted point as a numpy array of shape (2,).
     """
-    point_xmls = re.findall(r'<point.*?</point>', pred, re.DOTALL)
+    point_xmls = re.findall(r'<points?.*?</points?>', pred, re.DOTALL)
     if len(point_xmls) == 0:
         print(f"Invalid prediction: {pred}")
         return None
@@ -42,8 +42,15 @@ def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
         point_elem = ElementTree.fromstring(point_xml)
         
         if point_elem is not None:
-            x = float(point_elem.get('x'))
-            y = float(point_elem.get('y'))
+            if point_elem.tag == 'point':
+                x = float(point_elem.get('x'))
+                y = float(point_elem.get('y'))
+            elif point_elem.tag == 'points':
+                x = float(point_elem.get('x1'))
+                y = float(point_elem.get('y1'))
+            else:
+                print(f"Invalid prediction: {pred}")
+                return None
             ret = np.array([x, y])
             if image_size is not None:
                 ret = ret / 100 * np.array(image_size)
@@ -59,7 +66,7 @@ class MolmoPredictor(ABC):
     def _pred(self, images: list[Image.Image], tasks: list[str], verbosity: int = 0) -> list[str]:
         raise NotImplementedError
 
-    def pred_points(self, images: list[Image.Image], tasks: list[str], verbosity: int = 0) -> np.ndarray:
+    def pred_points(self, images: list[Image.Image], tasks: list[str], verbosity: int = 0):
         """
         Args:
             images: The images of the scene.
@@ -70,26 +77,25 @@ class MolmoPredictor(ABC):
         """
         preds = self._pred(images, tasks, verbosity)
 
-        points = []
+        points: list[Optional[np.ndarray]] = []
         for pred, image in zip(preds, images):
             point = parse_point(pred, image.size)
-            if point is None:
-                raise ValueError(f"Failed to parse point from prediction: {pred}")
             points.append(point)
-        points = np.array(points)
 
         if verbosity >= 1:
             print(f"Predicted points: {points}")
 
         if verbosity >= 3:
             for image, point in zip(images, points):
+                if point is None:
+                    continue
                 draw = ImageDraw.Draw(image)
                 r = 5
                 draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="red")
 
         return points
 
-    def pred_grasp(self, images: list[Image.Image], pcs: list[np.ndarray], tasks: list[str], grasps: list[np.ndarray], cam_Ks: list[np.ndarray], verbosity: int = 0) -> list[int]:
+    def pred_grasp(self, images: list[Image.Image], pcs: list[np.ndarray], tasks: list[str], grasps: list[np.ndarray], cam_Ks: list[np.ndarray], verbosity: int = 0):
         """
         Args:
             images: The images of the scene.
@@ -102,9 +108,12 @@ class MolmoPredictor(ABC):
         """
         points = self.pred_points(images, tasks, verbosity=verbosity)
 
-        grasp_idxs = []
+        grasp_idxs: list[Optional[int]] = []
         for i in range(len(images)):
             point = points[i]
+            if point is None:
+                grasp_idxs.append(None)
+                continue
             sample_grasps = grasps[i]
             pc = pcs[i]
             image = images[i]

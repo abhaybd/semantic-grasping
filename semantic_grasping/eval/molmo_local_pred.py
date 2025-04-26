@@ -54,6 +54,6 @@ class GraspMolmoLocalPredictor(LocalPredictor):
 
 class MolmoLocalPredictor(LocalPredictor):
     def __init__(self, device: str = "cuda"):
-        ckpt_dir = "/weka/oe-training-default/roseh/molmo_pretrained_checkpoints/Molmo-7B-D-0924-Pretrained"
+        ckpt_dir = "/weka/oe-training-default/roseh/molmo_pretrained_checkpoints/Molmo-7B-D-0924"
         prompt_pfx = "Point to where I should grasp to accomplish the following task: "
         super().__init__(ckpt_dir, prompt_pfx, device=device)
