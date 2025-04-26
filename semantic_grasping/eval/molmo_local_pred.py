@@ -12,9 +12,10 @@ from olmo.data import build_mm_preprocessor, MMCollator
 from semantic_grasping.eval.molmo_pred import MolmoPredictor
 
 
-class MolmoLocalPredictor(MolmoPredictor):
-    def __init__(self, ckpt_dir: str, device: str = "cuda"):
+class LocalPredictor(MolmoPredictor):
+    def __init__(self, ckpt_dir: str, prompt_pfx: str, device: str = "cuda"):
         self.ckpt_dir = ckpt_dir
+        self.prompt_pfx = prompt_pfx
         self.model = Molmo.from_checkpoint(ckpt_dir, device=device)
         self.processor = build_mm_preprocessor(self.model.config, for_inference=True)
         self.collator = MMCollator(include_metadata=False)
@@ -46,3 +47,13 @@ class MolmoLocalPredictor(MolmoPredictor):
                 print(f"Output {i}:", pred)
             ret.append(pred)
         return ret
+
+class GraspMolmoLocalPredictor(LocalPredictor):
+    def __init__(self, ckpt_dir: str, device: str = "cuda"):
+        super().__init__(ckpt_dir, "instruction: Point to the grasp that would accomplish the following task: ", device=device)
+
+class MolmoLocalPredictor(LocalPredictor):
+    def __init__(self, device: str = "cuda"):
+        ckpt_dir = "/weka/oe-training-default/roseh/molmo_pretrained_checkpoints/Molmo-7B-D-0924-Pretrained"
+        prompt_pfx = "Point to where I should grasp to accomplish the following task: "
+        super().__init__(ckpt_dir, prompt_pfx, device=device)

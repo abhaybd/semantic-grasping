@@ -6,19 +6,22 @@ import os
 from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
 
 from semantic_grasping.utils import tqdm
-from semantic_grasping.eval.molmo_local_pred import MolmoLocalPredictor
+from semantic_grasping.eval.molmo_local_pred import MolmoLocalPredictor, GraspMolmoLocalPredictor
 from semantic_grasping.eval.molmo_pred import depth_to_pc
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("model_name")
     parser.add_argument("tg_dir")
-    parser.add_argument("ckpt_dir")
     parser.add_argument("out_dir")
     parser.add_argument("split")
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--random", action="store_true")
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--grasp-molmo", help="Checkpoint dir")
+    group.add_argument("--molmo", action="store_true")
+    group.add_argument("--random", action="store_true")
+
     return parser.parse_args()
 
 def parse_view_labels(tg_library: TaskGraspScanLibrary, path: str):
@@ -162,7 +165,12 @@ def main():
             eval_results[fold] = random_eval_fold(tg_library, split_dir, fold, view_labels)
             accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
     else:
-        predictor = MolmoLocalPredictor(args.ckpt_dir)
+        if args.grasp_molmo:
+            predictor = GraspMolmoLocalPredictor(args.grasp_molmo)
+        elif args.molmo:
+            predictor = MolmoLocalPredictor()
+        else:
+            raise ValueError("Invalid model")
         for fold in sorted(os.listdir(split_dir)):
             eval_results[fold] = eval_fold(tg_library, predictor, split_dir, fold, view_labels, args.batch_size)
             accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
