@@ -1,0 +1,3 @@
+name: graspmolmo
+ckpt_dir: "???"
+prompt_pfx: "Point to the grasp that would accomplish the following task: "

@@ -1,28 +1,29 @@
-import argparse
 from functools import cache
-import json
 import os
+
+import wandb
+import hydra
+from omegaconf import DictConfig, OmegaConf
+from pydantic import BaseModel
+from PIL import Image
 
 from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
 
-from semantic_grasping.utils import tqdm
-from semantic_grasping.eval.molmo_local_pred import MolmoLocalPredictor, GraspMolmoLocalPredictor
+from semantic_grasping.utils import tqdm, build_wandb_config
+from semantic_grasping.eval.molmo_local_pred import LocalPredictor
 from semantic_grasping.eval.molmo_pred import depth_to_pc
 
+class TGEvalModelConfig(BaseModel):
+    name: str
+    ckpt_dir: str
+    prompt_pfx: str
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("tg_dir")
-    parser.add_argument("out_dir")
-    parser.add_argument("split")
-    parser.add_argument("--batch-size", type=int, default=16)
-
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--grasp-molmo", help="Checkpoint dir")
-    group.add_argument("--molmo", action="store_true")
-    group.add_argument("--random", action="store_true")
-
-    return parser.parse_args()
+class TGEvalConfig(BaseModel):
+    tg_dir: str
+    out_dir: str
+    split: str
+    batch_size: int
+    eval_model: TGEvalModelConfig
 
 def parse_view_labels(tg_library: TaskGraspScanLibrary, path: str):
     view_labels: dict[tuple[str, int], dict[str, set[int]]] = {}  # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
@@ -91,7 +92,7 @@ def random_eval_fold(tg_library: TaskGraspScanLibrary, split_dir: str, fold: str
         "n_succ": sum(succ),
     }
 
-def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]], batch_size: int):
+def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]], batch_size: int):
     view_labels = filter_view_labels_for_fold(tg_library, all_view_labels, split_dir, fold)
 
     eval_data = []
@@ -101,14 +102,10 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, 
 
     n_succ = 0
     n_samples = 0
-    results_data = {
-        "results": {},
-        "ckpt_dir": predictor.ckpt_dir,
-        "split": os.path.basename(split_dir),
-        "n_samples": 0,
-        "n_succ": 0,
-        "fold": fold,
-    }
+    results_data = {}
+
+    fail_pred_viz: list[tuple[Image.Image, str]] = []
+    succ_pred_viz: list[tuple[Image.Image, str]] = []
     with tqdm(total=len(eval_data)) as pbar:
         for i in range(0, len(eval_data), batch_size):
             batch_eval_data = eval_data[i:i+batch_size]
@@ -127,61 +124,79 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: MolmoLocalPredictor, 
                 cam_Ks.append(sample["cam_params"])
                 tasks.append(f"Grasp the {sample['object_name']} to {task_verb}")
 
-            pred_grasp_ids = predictor.pred_grasp(images, pcs, tasks, grasps, cam_Ks)
-            for pred_grasp_id, (object_id, view_id, task_verb, grasp_ids) in zip(pred_grasp_ids, batch_eval_data):
-                if pred_grasp_id is not None:
-                    results_data["results"][f"{object_id}-{view_id}-{task_verb}"] = {
-                        "pred_grasp_id": pred_grasp_id,
-                        "gt_grasp_ids": list(grasp_ids),
-                        "success": pred_grasp_id in grasp_ids
-                    }
-                    if pred_grasp_id in grasp_ids:
-                        n_succ += 1
+            pred_grasp_ids = predictor.pred_grasp(images, pcs, tasks, grasps, cam_Ks, verbosity=3)
+            for j in range(len(batch_eval_data)):
+                pred_grasp_id = pred_grasp_ids[j]
+                _, _, _, grasp_ids = batch_eval_data[j]
+                if pred_grasp_id is not None and pred_grasp_id in grasp_ids:
+                    n_succ += 1
+                    succ_pred_viz.append((images[j], tasks[j]))
+                else:
+                    fail_pred_viz.append((images[j], tasks[j]))
                 n_samples += 1
             pbar.update(len(batch_eval_data))
             pbar.set_description(f"Evaluating fold {fold} (top-1 acc={n_succ}/{n_samples}={n_succ / n_samples:.1%})")
     results_data["n_samples"] = n_samples
     results_data["n_succ"] = n_succ
+    results_data["accuracy"] = n_succ / n_samples
 
     print(f"Fold {fold} top-1 accuracy: {n_succ}/{len(eval_data)}={n_succ / len(eval_data):.1%}")
-    return results_data
+    return results_data, succ_pred_viz, fail_pred_viz
 
-def main():
-    args = get_args()
-    os.makedirs(args.out_dir, exist_ok=True)
+@hydra.main(version_base=None, config_path="../../config", config_name="eval_tg.yaml")
+def main(cfg: DictConfig):
+    if missing_keys := OmegaConf.missing_keys(cfg):
+        raise ValueError(f"Missing keys: {missing_keys}")
+    print(OmegaConf.to_yaml(cfg))
+    config = TGEvalConfig(**OmegaConf.to_object(cfg))
 
-    tg_library = TaskGraspScanLibrary(args.tg_dir)
+    ckpt_dir = config.eval_model.ckpt_dir
+    if "shard" in os.path.basename(ckpt_dir):
+        ckpt_name = "-".join(os.path.normpath(ckpt_dir).split(os.sep)[-2:])
+    else:
+        ckpt_name = os.path.basename(ckpt_dir)
 
-    split_dir = os.path.join(args.tg_dir, "splits_final", args.split)
+    out_dir = os.path.join(config.out_dir, config.eval_model.name, ckpt_name)
+    os.makedirs(out_dir, exist_ok=True)
+
+    task_name = os.getenv("GANTRY_TASK_NAME", None)
+    run = wandb.init(
+        entity="prior-ai2",
+        project="semantic-grasping",
+        config=build_wandb_config(cfg),
+        name=task_name,
+        dir=out_dir,
+        job_type="eval_tg"
+    )
+
+    tg_library = TaskGraspScanLibrary(config.tg_dir)
+    split_dir = os.path.join(config.tg_dir, "splits_final", config.split)
     if not os.path.isdir(split_dir):
         raise FileNotFoundError(f"Split directory {split_dir} not found")
 
     # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
-    view_labels = parse_view_labels(tg_library, os.path.join(args.tg_dir, "task2_results.txt"))
+    view_labels = parse_view_labels(tg_library, os.path.join(config.tg_dir, "task2_results.txt"))
 
-    eval_results = {}
+    predictor = LocalPredictor(config.eval_model.ckpt_dir, config.eval_model.prompt_pfx)
+
+    fold_results = {}
     accs = []
-    if args.random:
-        for fold in sorted(os.listdir(split_dir)):
-            eval_results[fold] = random_eval_fold(tg_library, split_dir, fold, view_labels)
-            accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
-        model_name = "random"
-    else:
-        if args.grasp_molmo:
-            predictor = GraspMolmoLocalPredictor(args.grasp_molmo)
-            model_name = "graspmolmo"
-        elif args.molmo:
-            predictor = MolmoLocalPredictor()
-            model_name = "molmo"
-        else:
-            raise ValueError("Invalid model")
-        for fold in sorted(os.listdir(split_dir)):
-            eval_results[fold] = eval_fold(tg_library, predictor, split_dir, fold, view_labels, args.batch_size)
-            accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
+    succ_viz: list[wandb.Image] = []
+    fail_viz: list[wandb.Image] = []
+    for fold in sorted(os.listdir(split_dir)):
+        fold_results[fold], succ_pred_viz, fail_pred_viz = eval_fold(tg_library, predictor, split_dir, fold, view_labels, config.batch_size)
+        succ_viz.extend([wandb.Image(image, caption=task) for image, task in succ_pred_viz])
+        fail_viz.extend([wandb.Image(image, caption=task) for image, task in fail_pred_viz])
+        accs.append(fold_results[fold]["accuracy"])
+    run.summary["fold_results"] = fold_results
+    acc = sum(accs) / len(accs)
+    run.summary["accuracy"] = acc
+    print(f"Average top-1 accuracy: {acc:.1%}")
 
-    print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
-    with open(os.path.join(args.out_dir, f"results_{model_name}_{args.split}.json"), "w") as f:
-        json.dump(eval_results, f, indent=2)
+    if len(succ_viz) > 0:
+        run.log({"succ_predictions": succ_viz})
+    if len(fail_viz) > 0:
+        run.log({"fail_predictions": fail_viz})
 
 if __name__ == "__main__":
     main()
