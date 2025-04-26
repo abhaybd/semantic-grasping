@@ -12,6 +12,7 @@ from semantic_grasping.eval.molmo_pred import depth_to_pc
 
 def get_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("model_name")
     parser.add_argument("tg_dir")
     parser.add_argument("ckpt_dir")
     parser.add_argument("out_dir")
@@ -154,26 +155,21 @@ def main():
     # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
     view_labels = parse_view_labels(tg_library, os.path.join(args.tg_dir, "task2_results.txt"))
 
+    eval_results = {}
+    accs = []
     if args.random:
-        eval_results = {}
-        accs = []
         for fold in sorted(os.listdir(split_dir)):
             eval_results[fold] = random_eval_fold(tg_library, split_dir, fold, view_labels)
             accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
-        print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
-        with open(os.path.join(args.out_dir, f"results_random_{args.split}.json"), "w") as f:
-            json.dump(eval_results, f, indent=2)
     else:
         predictor = MolmoLocalPredictor(args.ckpt_dir)
-        eval_results = {}
-        accs = []
         for fold in sorted(os.listdir(split_dir)):
             eval_results[fold] = eval_fold(tg_library, predictor, split_dir, fold, view_labels, args.batch_size)
             accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
-        print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
 
-        with open(os.path.join(args.out_dir, f"results_{args.split}.json"), "w") as f:
-            json.dump(eval_results, f, indent=2)
+    print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
+    with open(os.path.join(args.out_dir, f"results_{args.model_name}_{args.split}.json"), "w") as f:
+        json.dump(eval_results, f, indent=2)
 
 if __name__ == "__main__":
     main()
