@@ -27,7 +27,7 @@ class LocalPredictor(MolmoPredictor):
             s = {
                 "style": "robot_control",
                 "image": image,
-                "prompt": f"instruction: Point to the grasp that would accomplish the following task: {task}"
+                "prompt": f"{self.prompt_pfx}{task}"
             }
             samples.append(self.processor(s))
             if verbosity >= 1:
@@ -50,7 +50,7 @@ class LocalPredictor(MolmoPredictor):
 
 class GraspMolmoLocalPredictor(LocalPredictor):
     def __init__(self, ckpt_dir: str, device: str = "cuda"):
-        super().__init__(ckpt_dir, "instruction: Point to the grasp that would accomplish the following task: ", device=device)
+        super().__init__(ckpt_dir, "robot_control: instruction: Point to the grasp that would accomplish the following task: ", device=device)
 
 class MolmoLocalPredictor(LocalPredictor):
     def __init__(self, device: str = "cuda"):
