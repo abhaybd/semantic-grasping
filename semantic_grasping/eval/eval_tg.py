@@ -72,26 +72,6 @@ def filter_view_labels_for_fold(tg_library: TaskGraspScanLibrary, view_labels: d
 def get_sample(tg_library: TaskGraspScanLibrary, object_id: str, view_id: int):
     return tg_library.get(object_id, view_id)
 
-def random_eval_fold(tg_library: TaskGraspScanLibrary, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]]):
-    view_labels = filter_view_labels_for_fold(tg_library, all_view_labels, split_dir, fold)
-
-    eval_data = []
-    for (object_id, view_id), task_grasps in view_labels.items():
-        for task_verb, grasp_ids in task_grasps.items():
-            eval_data.append((object_id, view_id, task_verb, grasp_ids))
-
-    succ = []
-    for object_id, view_id, task_verb, grasp_ids in eval_data:
-        sample = get_sample(tg_library, object_id, view_id)
-        grasps = sample["registered_grasps"]
-        succ.append(len(grasp_ids) / len(grasps))
-    return {
-        "split": os.path.basename(split_dir),
-        "fold": fold,
-        "n_samples": len(eval_data),
-        "n_succ": sum(succ),
-    }
-
 def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split_dir: str, fold: str, all_view_labels: dict[tuple[str, int], dict[str, set[int]]], batch_size: int):
     view_labels = filter_view_labels_for_fold(tg_library, all_view_labels, split_dir, fold)
 
@@ -117,7 +97,7 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split
 
             for object_id, view_id, task_verb, grasp_ids in batch_eval_data:
                 sample = get_sample(tg_library, object_id, view_id)
-                images.append(sample["rgb"])
+                images.append(sample["rgb"].copy())
                 pc = depth_to_pc(sample["depth"], sample["cam_params"])
                 pcs.append(pc)
                 grasps.append(sample["registered_grasps"])

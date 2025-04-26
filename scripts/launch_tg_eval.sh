@@ -32,5 +32,5 @@ for split in $SPLITS; do
         --install "./scripts/install_molmo.sh && pip install -e .[eval]" \
         --allow-dirty \
         -- \
-        python semantic_grasping/eval/eval_tg.py $MODEL_ARGS
+        python semantic_grasping/eval/eval_tg.py split=$split $MODEL_ARGS
 done
