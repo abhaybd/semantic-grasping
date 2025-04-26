@@ -6,13 +6,24 @@ from PIL import Image
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from semantic_grasping.eval.molmo_local_pred import MolmoLocalPredictor
+from semantic_grasping.eval.molmo_local_pred import MolmoLocalPredictor, GraspMolmoLocalPredictor
 
-CKPT_DIR = os.getenv("CKPT_DIR", "/weka/oe-training-default/roseh/mm_olmo/robomolmo_checkpoints/graspmolmo_cotraining_06_graspmolmo-focused_20250423_014047/latest-unsharded")
 
-print("Loading checkpoint from", CKPT_DIR)
-molmo = MolmoLocalPredictor(CKPT_DIR)
-print("Done!")
+MODEL = os.getenv("MODEL")
+if MODEL is None:
+    raise ValueError("MODEL is not set")
+
+if MODEL == "molmo":
+    print("Loading Molmo model")
+    molmo = MolmoLocalPredictor()
+    print("Done!")
+elif MODEL == "graspmolmo":
+    CKPT_DIR = os.getenv("CKPT_DIR", "/weka/oe-training-default/roseh/mm_olmo/robomolmo_checkpoints/graspmolmo_cotraining_06_graspmolmo-focused_20250423_014047/latest-unsharded")
+    print("Loading GraspMolmo model from", CKPT_DIR)
+    molmo = GraspMolmoLocalPredictor(CKPT_DIR)
+    print("Done!")
+else:
+    raise ValueError(f"Invalid model: {MODEL}")
 
 app = FastAPI()
 
