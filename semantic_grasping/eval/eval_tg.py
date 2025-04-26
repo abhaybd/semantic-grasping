@@ -177,7 +177,11 @@ def main(cfg: DictConfig):
     # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
     view_labels = parse_view_labels(tg_library, os.path.join(config.tg_dir, "task2_results.txt"))
 
-    predictor = LocalPredictor(config.eval_model.ckpt_dir, config.eval_model.prompt_pfx)
+    prompt_pfx = config.eval_model.prompt_pfx
+    if config.eval_model.name == "graspmolmo" and "_evals" not in ckpt_name:
+        print("WARN: Adding robot_control: instruction: prefix to prompts")
+        prompt_pfx = "robot_control: instruction: " + prompt_pfx
+    predictor = LocalPredictor(config.eval_model.ckpt_dir, prompt_pfx)
 
     fold_results = {}
     accs = []
