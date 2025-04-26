@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+import os
 
 from PIL import Image
 from fastapi import FastAPI, HTTPException
@@ -7,7 +8,7 @@ from pydantic import BaseModel
 
 from semantic_grasping.eval.molmo_local_pred import MolmoLocalPredictor
 
-CKPT_DIR = "/weka/oe-training-default/roseh/mm_olmo/robomolmo_checkpoints/graspmolmo_cotraining_06_graspmolmo-focused_20250423_014047/latest-unsharded"
+CKPT_DIR = os.getenv("CKPT_DIR", "/weka/oe-training-default/roseh/mm_olmo/robomolmo_checkpoints/graspmolmo_cotraining_06_graspmolmo-focused_20250423_014047/latest-unsharded")
 
 print("Loading checkpoint from", CKPT_DIR)
 molmo = MolmoLocalPredictor(CKPT_DIR)
