@@ -165,11 +165,14 @@ def main():
         for fold in sorted(os.listdir(split_dir)):
             eval_results[fold] = random_eval_fold(tg_library, split_dir, fold, view_labels)
             accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
+        model_name = "random"
     else:
         if args.grasp_molmo:
             predictor = GraspMolmoLocalPredictor(args.grasp_molmo)
+            model_name = "graspmolmo"
         elif args.molmo:
             predictor = MolmoLocalPredictor()
+            model_name = "molmo"
         else:
             raise ValueError("Invalid model")
         for fold in sorted(os.listdir(split_dir)):
@@ -177,7 +180,7 @@ def main():
             accs.append(eval_results[fold]["n_succ"] / eval_results[fold]["n_samples"])
 
     print(f"Average top-1 accuracy: {sum(accs) / len(accs):.1%}")
-    with open(os.path.join(args.out_dir, f"results_{args.model_name}_{args.split}.json"), "w") as f:
+    with open(os.path.join(args.out_dir, f"results_{model_name}_{args.split}.json"), "w") as f:
         json.dump(eval_results, f, indent=2)
 
 if __name__ == "__main__":
