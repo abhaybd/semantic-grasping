@@ -50,7 +50,7 @@ class LocalPredictor(MolmoPredictor):
 
 class GraspMolmoLocalPredictor(LocalPredictor):
     def __init__(self, ckpt_dir: str, device: str = "cuda"):
-        super().__init__(ckpt_dir, "robot_control: instruction: Point to the grasp that would accomplish the following task: ", device=device)
+        super().__init__(ckpt_dir, "Point to the grasp that would accomplish the following task: ", device=device)
 
 class MolmoLocalPredictor(LocalPredictor):
     def __init__(self, device: str = "cuda"):
