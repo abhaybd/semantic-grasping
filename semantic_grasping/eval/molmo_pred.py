@@ -5,7 +5,8 @@ from typing import Optional
 
 import numpy as np
 from PIL import Image, ImageDraw
-from scipy.spatial import KDTree
+
+from semantic_grasping.eval.utils import get_grasp_points
 
 
 DRAW_POINTS = np.array([
@@ -14,16 +15,6 @@ DRAW_POINTS = np.array([
     [-0.041, 0, 0.066],
     [-0.041, 0, 0.112],
 ])  # in grasp frame
-
-def depth_to_pc(depth: np.ndarray, cam_K: np.ndarray) -> np.ndarray:
-    h, w = depth.shape
-    u, v = np.meshgrid(np.arange(w), np.arange(h), indexing="xy")
-    depth_mask = (depth > 0)
-    uvd = np.stack((u, v, np.ones_like(u)), axis=-1).astype(np.float32)
-    uvd *= np.expand_dims(depth, axis=-1)
-    uvd = uvd[depth_mask]
-    xyz = np.linalg.solve(cam_K, uvd.T).T
-    return xyz
 
 def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
     """
@@ -119,11 +110,7 @@ class MolmoPredictor(ABC):
             image = images[i]
             cam_K = cam_Ks[i]
 
-            grasp_pos = sample_grasps[:, :3, 3] + sample_grasps[:, :3, 2] * 0.066
-
-            tree = KDTree(pc[:, :3])
-            _, point_idxs = tree.query(grasp_pos, k=1)
-            grasp_points = pc[point_idxs, :3]
+            grasp_points = get_grasp_points(pc, sample_grasps)
 
             grasp_points_2d = grasp_points @ cam_K.T
             grasp_points_2d = grasp_points_2d[:, :2] / grasp_points_2d[:, 2:3]

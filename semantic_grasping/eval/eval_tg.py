@@ -1,5 +1,6 @@
 from functools import cache
 import os
+import random
 
 import wandb
 import hydra
@@ -11,7 +12,7 @@ from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
 
 from semantic_grasping.utils import tqdm, build_wandb_config
 from semantic_grasping.eval.molmo_local_pred import LocalPredictor
-from semantic_grasping.eval.molmo_pred import depth_to_pc
+from semantic_grasping.eval.utils import depth_to_pc
 
 class TGEvalModelConfig(BaseModel):
     name: str
@@ -178,8 +179,14 @@ def main(cfg: DictConfig):
     print(f"Average top-1 accuracy: {acc:.1%}")
 
     if len(succ_viz) > 0:
+        if len(succ_viz) > 100:
+            random.shuffle(succ_viz)
+            succ_viz = succ_viz[:100]
         run.log({"succ_predictions": succ_viz})
     if len(fail_viz) > 0:
+        if len(fail_viz) > 100:
+            random.shuffle(fail_viz)
+            fail_viz = fail_viz[:100]
         run.log({"fail_predictions": fail_viz})
 
 if __name__ == "__main__":

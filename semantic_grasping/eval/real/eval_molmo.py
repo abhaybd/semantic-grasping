@@ -5,23 +5,14 @@ from PIL import Image
 import numpy as np
 
 from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
-from semantic_grasping.eval.molmo_remote_pred import ZeroShotMolmoModal, GraspMolmoModal, GraspMolmoBeaker
+from semantic_grasping.eval.molmo_remote_pred import ZeroShotMolmoModal, GraspMolmoBeaker
+from semantic_grasping.eval.utils import depth_to_pc
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--zero-shot", action="store_true")
     return parser.parse_args()
-
-def depth_to_pc(depth: np.ndarray, cam_K: np.ndarray) -> np.ndarray:
-    h, w = depth.shape
-    u, v = np.meshgrid(np.arange(w), np.arange(h), indexing="xy")
-    depth_mask = (depth > 0)
-    uvd = np.stack((u, v, np.ones_like(u)), axis=-1).astype(np.float32)
-    uvd *= np.expand_dims(depth, axis=-1)
-    uvd = uvd[depth_mask]
-    xyz = np.linalg.solve(cam_K, uvd.T).T
-    return xyz
 
 def get_obs():
     # library = TaskGraspScanLibrary("../semantic-grasping-datagen/data/taskgrasp/taskgrasp/scans")

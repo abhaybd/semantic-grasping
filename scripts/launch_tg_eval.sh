@@ -20,6 +20,7 @@ for split in $SPLITS; do
     gantry run -w ai2/abhayd -b ai2/prior \
         --name "tg_eval_${MODEL}_${split}_${TIMESTAMP}" \
         --task-name "tg_eval_${MODEL}_${split}_${TIMESTAMP}" \
+        --env-secret WANDB_API_KEY=WANDB_API_KEY \
         --env-secret GITHUB_TOKEN=GITHUB_TOKEN \
         --dataset-secret SSH_KEY:/root/.ssh/id_ed25519 \
         --beaker-image ai2/cuda11.8-dev-ubuntu20.04 \
