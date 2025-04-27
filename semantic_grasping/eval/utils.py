@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-GRASP_VOLUME_SIZE = np.array([0.082, 0.02, 0.112-0.066])
+GRASP_VOLUME_SIZE = np.array([0.082, 0.01, 0.112-0.066])
 GRASP_VOLUME_CENTER = np.array([0, 0, (0.066+0.112)/2])
 
 def depth_to_pc(depth: np.ndarray, cam_K: np.ndarray) -> np.ndarray:

@@ -1,7 +1,10 @@
+hydra:
+  run:
+    dir: /results
+
 defaults:
   - eval_model: "???"
 
 tg_dir: /weka/prior/abhayd/semantic-grasping-datasets/taskgrasp_image
-out_dir: /weka/prior/abhayd/semantic-grasping-datasets/tg_evals
 split: "???"
 batch_size: 8

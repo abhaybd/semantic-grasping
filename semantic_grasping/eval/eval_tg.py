@@ -21,7 +21,6 @@ class TGEvalModelConfig(BaseModel):
 
 class TGEvalConfig(BaseModel):
     tg_dir: str
-    out_dir: str
     split: str
     batch_size: int
     eval_model: TGEvalModelConfig
@@ -137,9 +136,7 @@ def main(cfg: DictConfig):
     else:
         ckpt_name = os.path.basename(ckpt_dir)
 
-    out_dir = os.path.join(config.out_dir, config.eval_model.name, ckpt_name)
-    os.makedirs(out_dir, exist_ok=True)
-
+    out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     task_name = os.getenv("GANTRY_TASK_NAME", None)
     run = wandb.init(
         entity="prior-ai2",
