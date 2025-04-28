@@ -1,0 +1,12 @@
+hydra:
+  run:
+    dir: /results
+
+defaults:
+  - eval_model: "???"
+
+obs_dir: /weka/prior/abhayd/semantic-grasping-datasets/0422_1646/observations_test
+task_dir: /weka/prior/abhayd/semantic-grasping-datasets/0422_1646/task_point_v2_test
+batch_size: 8
+far_clip: 1.1
+dataloader_workers: 16
