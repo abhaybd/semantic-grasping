@@ -141,8 +141,7 @@ def main(cfg: DictConfig):
         "n_succ": 0,
     }
     with ProcessPoolExecutor(config.dataloader_workers) as executor:
-        # n_samples = len(df)
-        n_samples = 2 * config.batch_size  # TODO: remove
+        n_samples = len(df)
         futures = [executor.submit(load_batch, config, df.iloc[i:i+config.batch_size]) for i in range(0, n_samples, config.batch_size)]
         for future in tqdm(as_completed(futures), total=len(futures)):
             batch: Batch = future.result()
