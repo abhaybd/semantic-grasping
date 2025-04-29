@@ -7,12 +7,13 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel
 from PIL import Image
+import numpy as np
 
 from semantic_grasping_datagen.eval.utils import TaskGraspScanLibrary
 
 from semantic_grasping.utils import tqdm, build_wandb_config
 from semantic_grasping.eval.molmo_local_pred import LocalPredictor
-from semantic_grasping.eval.utils import depth_to_pc
+from semantic_grasping.eval.utils import depth_to_pc, draw_grasp, draw_grasp_points
 
 class TGEvalModelConfig(BaseModel):
     name: str
@@ -109,11 +110,20 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split
             for j in range(len(batch_eval_data)):
                 pred_grasp_id = pred_grasp_ids[j]
                 _, _, _, grasp_ids = batch_eval_data[j]
+                image = images[j]
+
+                grasp_mask = np.zeros(len(grasps[j]), dtype=bool)
+                grasp_mask[list(grasp_ids)] = True
+                draw_grasp_points(image, cam_Ks[j], pcs[j], grasps[j][grasp_mask], color="green")
+                draw_grasp_points(image, cam_Ks[j], pcs[j], grasps[j][~grasp_mask], color="red")
+                if pred_grasp_id is not None:
+                    draw_grasp(image, cam_Ks[j], grasps[j][pred_grasp_id], color="blue")
+
                 if pred_grasp_id is not None and pred_grasp_id in grasp_ids:
                     n_succ += 1
-                    succ_pred_viz.append((images[j], tasks[j]))
+                    succ_pred_viz.append((image, tasks[j]))
                 else:
-                    fail_pred_viz.append((images[j], tasks[j]))
+                    fail_pred_viz.append((image, tasks[j]))
                 n_samples += 1
             pbar.update(len(batch_eval_data))
             pbar.set_description(f"Evaluating fold {fold} (top-1 acc={n_succ}/{n_samples}={n_succ / n_samples:.1%})")

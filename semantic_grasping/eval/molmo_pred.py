@@ -6,15 +6,8 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageDraw
 
-from semantic_grasping.eval.utils import get_grasp_points
+from semantic_grasping.eval.utils import get_grasp_points, draw_grasp_points, draw_grasp
 
-
-DRAW_POINTS = np.array([
-    [0.041, 0, 0.112],
-    [0.041, 0, 0.066],
-    [-0.041, 0, 0.066],
-    [-0.041, 0, 0.112],
-])  # in grasp frame
 
 def parse_point(pred: str, image_size: Optional[tuple[int, int]] = None):
     """
@@ -82,7 +75,7 @@ class MolmoPredictor(ABC):
                     continue
                 draw = ImageDraw.Draw(image)
                 r = 5
-                draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="red")
+                draw.ellipse((point[0] - r, point[1] - r, point[0] + r, point[1] + r), fill="blue")
 
         return points
 
@@ -119,21 +112,8 @@ class MolmoPredictor(ABC):
             grasp_idx = np.argmin(dists).item()
             grasp_idxs.append(grasp_idx)
 
-            if verbosity >= 3:
-                draw = ImageDraw.Draw(image)
-                r = 5
-                for grasp_point in grasp_points_2d:
-                    draw.ellipse((grasp_point[0] - r, grasp_point[1] - r, grasp_point[0] + r, grasp_point[1] + r), fill="blue")
-
-                grasp = sample_grasps[grasp_idx]
-                draw_points = DRAW_POINTS @ grasp[:3, :3].T + grasp[:3, 3]
-                draw_points_px = draw_points @ cam_K.T
-                draw_points_px = draw_points_px[:, :2] / draw_points_px[:, 2:3]
-                draw_points_px = draw_points_px.round().astype(int).tolist()
-
-                for i in range(len(DRAW_POINTS)-1):
-                    p0 = draw_points_px[i]
-                    p1 = draw_points_px[i+1]
-                    draw.line(p0 + p1, fill="red", width=2)
+            if verbosity >= 4:
+                draw_grasp_points(image, cam_K, pc, sample_grasps, r=5, color="red")
+                draw_grasp(image, cam_K, sample_grasps[grasp_idx], color="blue")
 
         return grasp_idxs

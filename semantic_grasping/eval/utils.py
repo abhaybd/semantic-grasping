@@ -1,8 +1,16 @@
 import numpy as np
 import torch
+from PIL import Image, ImageDraw
 
 GRASP_VOLUME_SIZE = np.array([0.082, 0.01, 0.112-0.066])
 GRASP_VOLUME_CENTER = np.array([0, 0, (0.066+0.112)/2])
+
+DRAW_POINTS = np.array([
+    [0.041, 0, 0.112],
+    [0.041, 0, 0.066],
+    [-0.041, 0, 0.066],
+    [-0.041, 0, 0.112],
+])  # in grasp frame
 
 def depth_to_pc(depth: np.ndarray, cam_K: np.ndarray) -> np.ndarray:
     h, w = depth.shape
@@ -79,3 +87,50 @@ def get_grasp_points(pc: np.ndarray, grasps: np.ndarray):
     pc_torch = torch.as_tensor(pc, dtype=torch.float32, device=device)
     grasps_torch = torch.as_tensor(grasps, dtype=torch.float32, device=device)
     return get_grasp_points_torch(pc_torch, grasps_torch).cpu().numpy().astype(pc.dtype)
+
+def draw_grasp_points(image: Image.Image, cam_K: np.ndarray, pc: np.ndarray, grasps: np.ndarray, r=5, color="blue"):
+    """
+    Draws the grasp points in-place onto the image.
+    Args:
+        image: The image to draw on.
+        cam_K: (3, 3) The camera intrinsic matrix.
+        pc: (N, 3) The point cloud of the scene.
+        grasps: (K, 4, 4) The grasp poses to draw.
+        r: The radius of the grasp points.
+        color: The color of the grasp points.
+    Returns:
+        The same image object with the grasp points drawn on it.
+    """
+    if len(grasps) == 0:
+        return image
+    points_3d = get_grasp_points(pc, grasps)
+    points_px = points_3d @ cam_K.T
+    points_px = points_px[..., :2] / points_px[..., 2:3]
+
+    draw = ImageDraw.Draw(image)
+    for point_px in points_px:
+        draw.ellipse((point_px[0] - r, point_px[1] - r, point_px[0] + r, point_px[1] + r), fill=color)
+    return image
+
+def draw_grasp(image: Image.Image, cam_K: np.ndarray, grasp: np.ndarray, color="red"):
+    """
+    Draws the grasp with lines in-place onto the image.
+    Args:
+        image: The image to draw on.
+        cam_K: (3, 3) The camera intrinsic matrix.
+        grasp: (4, 4) The grasp to draw.
+        color: The color of the grasp.
+    Returns:
+        The same image object with the grasp drawn on it.
+    """
+    draw_points = DRAW_POINTS @ grasp[:3, :3].T + grasp[:3, 3]
+    draw_points_px = draw_points @ cam_K.T
+    draw_points_px = draw_points_px[:, :2] / draw_points_px[:, 2:3]
+    draw_points_px = draw_points_px.round().astype(int).tolist()
+
+    draw = ImageDraw.Draw(image)
+    for i in range(len(DRAW_POINTS)-1):
+        p0 = draw_points_px[i]
+        p1 = draw_points_px[i+1]
+        draw.line(p0 + p1, fill=color, width=2)
+    return image
