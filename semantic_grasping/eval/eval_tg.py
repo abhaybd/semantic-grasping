@@ -138,10 +138,12 @@ def main(cfg: DictConfig):
 
     out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     task_name = os.getenv("GANTRY_TASK_NAME", None)
+    wandb_cfg = build_wandb_config(cfg)
+    wandb_cfg["ckpt_name"] = ckpt_name
     run = wandb.init(
         entity="prior-ai2",
         project="semantic-grasping",
-        config=build_wandb_config(cfg),
+        config=wandb_cfg,
         name=task_name,
         dir=out_dir,
         job_type="eval_tg"
