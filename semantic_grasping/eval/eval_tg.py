@@ -24,6 +24,7 @@ class TGEvalConfig(BaseModel):
     split: str
     batch_size: int
     eval_model: TGEvalModelConfig
+    fold: str | None = None
 
 def parse_view_labels(tg_library: TaskGraspScanLibrary, path: str):
     view_labels: dict[tuple[str, int], dict[str, set[int]]] = {}  # (object_id, view_id) -> {task_verb -> set of positive grasp_ids}
@@ -168,6 +169,8 @@ def main(cfg: DictConfig):
     succ_viz: list[wandb.Image] = []
     fail_viz: list[wandb.Image] = []
     for fold in sorted(os.listdir(split_dir)):
+        if config.fold is not None and fold != config.fold:
+            continue
         fold_results[fold], succ_pred_viz, fail_pred_viz = eval_fold(tg_library, predictor, split_dir, fold, view_labels, config.batch_size)
         succ_viz.extend([wandb.Image(image, caption=task) for image, task in succ_pred_viz])
         fail_viz.extend([wandb.Image(image, caption=task) for image, task in fail_pred_viz])
