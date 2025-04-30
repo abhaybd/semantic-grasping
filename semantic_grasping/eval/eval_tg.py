@@ -111,7 +111,7 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split
             pred_grasp_ids = predictor.pred_grasp(images, pcs, tasks, grasps, cam_Ks, verbosity=3)
             for j in range(len(batch_eval_data)):
                 pred_grasp_id = pred_grasp_ids[j]
-                _, _, _, grasp_ids = batch_eval_data[j]
+                object_id, view_id, task_verb, grasp_ids = batch_eval_data[j]
                 image = images[j]
 
                 eval_results.append({
