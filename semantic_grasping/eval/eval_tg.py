@@ -1,6 +1,7 @@
 from functools import cache
 import os
 import random
+import json
 
 import wandb
 import hydra
@@ -85,6 +86,7 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split
     n_succ = 0
     n_samples = 0
     results_data = {}
+    eval_results = []
 
     fail_pred_viz: list[tuple[Image.Image, str]] = []
     succ_pred_viz: list[tuple[Image.Image, str]] = []
@@ -112,6 +114,15 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split
                 _, _, _, grasp_ids = batch_eval_data[j]
                 image = images[j]
 
+                eval_results.append({
+                    "object_id": object_id,
+                    "view_id": view_id,
+                    "task_verb": task_verb,
+                    "grasp_ids": list(grasp_ids),
+                    "pred_grasp_id": pred_grasp_id if pred_grasp_id is not None else -1,
+                    "success": pred_grasp_id is not None and pred_grasp_id in grasp_ids,
+                })
+
                 grasp_mask = np.zeros(len(grasps[j]), dtype=bool)
                 grasp_mask[list(grasp_ids)] = True
                 draw_grasp_points(image, cam_Ks[j], pcs[j], grasps[j][grasp_mask], color="green")
@@ -132,7 +143,7 @@ def eval_fold(tg_library: TaskGraspScanLibrary, predictor: LocalPredictor, split
     results_data["accuracy"] = n_succ / n_samples
 
     print(f"Fold {fold} top-1 accuracy: {n_succ}/{len(eval_data)}={n_succ / len(eval_data):.1%}")
-    return results_data, succ_pred_viz, fail_pred_viz
+    return results_data, eval_results, succ_pred_viz, fail_pred_viz
 
 @hydra.main(version_base=None, config_path="../../config", config_name="eval_tg.yaml")
 def main(cfg: DictConfig):
@@ -174,18 +185,21 @@ def main(cfg: DictConfig):
         prompt_pfx = "robot_control: instruction: " + prompt_pfx
     predictor = LocalPredictor(config.eval_model.ckpt_dir, prompt_pfx)
 
-    fold_results = {}
+    summary_results = {}
+    eval_results = {}
     accs = []
     succ_viz: list[wandb.Image] = []
     fail_viz: list[wandb.Image] = []
     for fold in sorted(os.listdir(split_dir)):
         if config.fold is not None and fold != config.fold:
             continue
-        fold_results[fold], succ_pred_viz, fail_pred_viz = eval_fold(tg_library, predictor, split_dir, fold, view_labels, config.batch_size)
+        summary_results[fold], eval_results[fold], succ_pred_viz, fail_pred_viz = eval_fold(tg_library, predictor, split_dir, fold, view_labels, config.batch_size)
         succ_viz.extend([wandb.Image(image, caption=task) for image, task in succ_pred_viz])
         fail_viz.extend([wandb.Image(image, caption=task) for image, task in fail_pred_viz])
-        accs.append(fold_results[fold]["accuracy"])
-    run.summary["fold_results"] = fold_results
+        accs.append(summary_results[fold]["accuracy"])
+    with open(os.path.join(out_dir, "eval_results.json"), "w") as f:
+        json.dump(eval_results, f)
+    run.summary["fold_results"] = summary_results
     acc = sum(accs) / len(accs)
     run.summary["accuracy"] = acc
     print(f"Average top-1 accuracy: {acc:.1%}")
